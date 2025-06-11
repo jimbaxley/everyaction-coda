@@ -1,0 +1,1146 @@
+import * as coda from "@codahq/packs-sdk";
+import { ContactSchema } from "./schemas/contact";
+import { EventSchema } from "./schemas/event";
+import { EventSignupSchema } from "./schemas/event-signup";
+import { SignupDetailsSchema } from "./schemas/signup-details";
+import { LocationSchema } from "./schemas/location";
+import { EventStatsSchema } from "./schemas/event-statistics";
+
+export const pack = coda.newPack();
+
+// Pack metadata
+pack.setUserAuthentication({
+  type: coda.AuthenticationType.WebBasic,
+  instructionsUrl: "https://docs.ngpvan.com/docs/authentication",
+  defaultConnectionRequirement: coda.ConnectionRequirement.Required, // Set default connection requirement for all formulas
+  uxConfig: {
+    placeholderUsername: "Application Name",
+    placeholderPassword: "API Key",
+  },
+  getConnectionName: async function(context) {
+    // Get user info to set a meaningful connection name
+    try {
+      const response = await context.fetcher.fetch({
+        method: "GET",
+        url: "https://api.securevan.com/v4/people/self",
+      });
+      const user = response.body;
+      return user.displayName || user.firstName + " " + user.lastName || "EveryAction User";
+    } catch (error) {
+      // Fallback if the user endpoint fails
+      return "EveryAction Connection";
+    }
+  },
+});
+
+pack.addNetworkDomain("api.securevan.com");
+
+// Schemas are imported from separate files at the top of this file
+// No inline schema definitions needed - using imported ContactSchema, EventSchema, EventSignupSchema
+
+// Get Contact formula
+pack.addFormula({
+  name: "GetContact",
+  description: "Retrieve a contact from EveryAction by VAN ID",
+  parameters: [
+    coda.makeParameter({
+      type: coda.ParameterType.Number,
+      name: "vanId",
+      description: "The VAN ID of the contact to retrieve",
+    }),
+  ],
+  resultType: coda.ValueType.Object,
+  schema: ContactSchema,
+  execute: async function ([vanId], context) {
+    const BASE_URL = "https://api.securevan.com/v4";
+    const encodedUrl = `${BASE_URL}/people/${vanId}?%24expand=emails,phones,addresses`;
+
+    const response = await context.fetcher.fetch({
+      method: "GET",
+      url: encodedUrl,
+    });
+    const contact = response.body;
+
+    // Get primary address, email, and phone
+    const primaryAddress = contact.addresses?.find((addr: any) => addr.isPreferred) || contact.addresses?.[0];
+    const primaryEmail = contact.emails?.find((email: any) => email.isPreferred) || contact.emails?.[0];
+    const primaryPhone = contact.phones?.find((phone: any) => phone.isPreferred) || contact.phones?.[0];
+
+    return {
+      vanId: contact.vanId,
+      firstName: contact.firstName,
+      middleName: contact.middleName,
+      lastName: contact.lastName,
+      commonName: contact.commonName,
+      officialName: contact.officialName,
+      email: primaryEmail?.email,
+      phoneNumber: primaryPhone?.phoneNumber,
+      streetAddress: primaryAddress?.addressLine1,
+      city: primaryAddress?.city,
+      stateOrProvince: primaryAddress?.stateOrProvince,
+      zipOrPostalCode: primaryAddress?.zipOrPostalCode,
+      contactMode: contact.contactMode,
+      dateCreated: contact.dateCreated,
+      dateModified: contact.dateModified,
+      emails: Array.isArray(contact.emails) ? contact.emails : [],
+      phones: Array.isArray(contact.phones) ? contact.phones : [],
+    };
+  },
+});
+
+// Create Contact formula
+pack.addFormula({
+  name: "CreateContact",
+  description: "Create a new contact in EveryAction",
+  parameters: [
+    coda.makeParameter({
+      type: coda.ParameterType.String,
+      name: "firstName",
+      description: "Contact's first name",
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.String,
+      name: "lastName",
+      description: "Contact's last name",
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.String,
+      name: "email",
+      description: "Contact's email address",
+      optional: true,
+    }),
+  ],
+  resultType: coda.ValueType.Number,
+  execute: async function ([firstName, lastName, email], context) {
+    const contactData = {
+      firstName,
+      lastName,
+      emails: email ? [{ email, type: "P" }] : [],
+    };
+    
+    const response = await context.fetcher.fetch({
+      method: "POST",
+      url: "https://api.securevan.com/v4/people",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(contactData),
+    });
+    
+    return response.body; // Returns the new VAN ID
+  },
+});
+
+// Create Event formula
+pack.addFormula({
+  name: "CreateEvent",
+  description: "Create a new event in EveryAction",
+  parameters: [
+    coda.makeParameter({
+      type: coda.ParameterType.String,
+      name: "name",
+      description: "Event name",
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.String,
+      name: "startDate",
+      description: "Event start date and time (ISO 8601 format, e.g., 2015-06-02T15:00:00-04:00)",
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.String,
+      name: "endDate",
+      description: "Event end date and time (ISO 8601 format, e.g., 2015-06-02T20:00:00-04:00)",
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.Number,
+      name: "eventTypeId",
+      description: "Event type ID (required)",
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.String,
+      name: "shortName",
+      description: "Event short name",
+      optional: true,
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.String,
+      name: "description",
+      description: "Event description",
+      optional: true,
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.Number,
+      name: "locationId",
+      description: "Location ID for the event",
+      optional: true,
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.Boolean,
+      name: "isOnlyEditableByCreatingUser",
+      description: "Whether only the creating user can edit this event (default: false)",
+      optional: true,
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.Number,
+      name: "roleId",
+      description: "Role ID for event volunteers (required - get from EveryAction admin)",
+      optional: true,
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.String,
+      name: "roleName",
+      description: "Role name (e.g., 'Host', 'Volunteer')",
+      optional: true,
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.Boolean,
+      name: "isEventLead",
+      description: "Whether this role is an event lead (default: false)",
+      optional: true,
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.String,
+      name: "shiftName",
+      description: "Shift name (e.g., 'Setup', 'Main Event', 'Cleanup')",
+      optional: true,
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.String,
+      name: "shiftStartTime",
+      description: "Shift start date and time (ISO 8601 format, e.g., '2015-06-01T15:00:00-04:00')",
+      optional: true,
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.String,
+      name: "shiftEndTime",
+      description: "Shift end date and time (ISO 8601 format, e.g., '2015-06-01T20:00:00-04:00')",
+      optional: true,
+    }),
+  ],
+  resultType: coda.ValueType.Number,
+  execute: async function ([name, startDate, endDate, eventTypeId, shortName, description, locationId, isOnlyEditableByCreatingUser, roleId, roleName, isEventLead, shiftName, shiftStartTime, shiftEndTime], context) {
+    const eventData: any = {
+      name,
+      startDate,
+      endDate,
+      eventType: {
+        eventTypeId,
+      },
+      isOnlyEditableByCreatingUser: isOnlyEditableByCreatingUser || false,
+      roles: [
+        {
+          roleId: roleId || 1, // Default role ID if not provided
+          name: roleName || "Volunteer", // Default role name
+          isEventLead: isEventLead || false,
+        },
+      ],
+      shifts: [
+        {
+          name: shiftName || "Main Event",
+          startTime: shiftStartTime || startDate,
+          endTime: shiftEndTime || endDate,
+        },
+      ],
+    };
+
+    if (shortName) {
+      eventData.shortName = shortName;
+    }
+
+    if (description) {
+      eventData.description = description;
+    }
+
+    // Robustly handle locationId as a number, object, or array (from Coda Relation column)
+    let resolvedLocationId = locationId;
+    if (Array.isArray(locationId)) {
+      if (locationId.length > 0) {
+        resolvedLocationId = locationId[0] && typeof locationId[0] === 'object' && 'locationId' in locationId[0]
+          ? (locationId[0] as any).locationId
+          : locationId[0];
+      } else {
+        resolvedLocationId = undefined;
+      }
+    } else if (locationId && typeof locationId === 'object' && 'locationId' in locationId) {
+      resolvedLocationId = (locationId as any).locationId;
+    }
+
+    if (resolvedLocationId) {
+      eventData.locations = [
+        {
+          locationId: resolvedLocationId,
+        },
+      ];
+    }
+
+    // Create the event (with shift included)
+    const response = await context.fetcher.fetch({
+      method: "POST",
+      url: "https://api.securevan.com/v4/events",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(eventData),
+    });
+
+    // Extract event ID from the Location header (e.g., "https://api.securevan.com/v4/events/450823")
+    const locationHeader = response.headers?.location;
+    if (!locationHeader) {
+      throw new coda.UserVisibleError("No Location header found in response");
+    }
+    const location = Array.isArray(locationHeader) ? locationHeader[0] : locationHeader;
+    const eventIdMatch = location.match(/\/events\/(\d+)$/);
+    if (!eventIdMatch) {
+      throw new coda.UserVisibleError("Could not extract event ID from Location header: " + location);
+    }
+    const eventId = parseInt(eventIdMatch[1], 10);
+
+    // Optionally, fetch the event to get the eventShiftId (first shift)
+    // (Uncomment if you want to return eventShiftId as well)
+    // const eventResp = await context.fetcher.fetch({
+    //   method: "GET",
+    //   url: `https://api.securevan.com/v4/events/${eventId}`,
+    // });
+    // const event = eventResp.body;
+    // const eventShiftId = event.shifts?.[0]?.eventShiftId;
+    // return { eventId, eventShiftId };
+
+    // Return just the event ID
+    return eventId;
+  },
+});
+
+// Shared mapping for event signup objects
+function mapEventSignup(signup: any) {
+  return {
+    eventSignupId: signup.eventSignupId,
+    personVanId: signup.person?.vanId,
+    personName: signup.person ? `${signup.person.firstName || ''} ${signup.person.lastName || ''}`.trim() : '',
+    eventId: signup.event?.eventId,
+    eventName: signup.event?.name,
+    eventShiftId: signup.shift?.eventShiftId,
+    shift: signup.shift?.name,
+    roleId: signup.role?.roleId,
+    role: signup.role?.name,
+    statusId: signup.status?.statusId,
+    status: signup.status?.name,
+    locationId: signup.location?.locationId,
+    location: signup.location?.name,
+    startTime: signup.startTime || signup.startTimeOverride || '',
+    endTime: signup.endTime || signup.endTimeOverride || '',
+    dateCreated: signup.dateCreated || '',
+    dateModified: signup.dateModified || '',
+  };
+}
+
+// Create EventSignup formula
+pack.addFormula({
+  name: "CreateEventSignup",
+  description: "Create a new event signup in EveryAction",
+  parameters: [
+    coda.makeParameter({
+      type: coda.ParameterType.Number,
+      name: "vanId",
+      description: "VAN ID of the person to sign up",
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.Number,
+      name: "eventId",
+      description: "ID of the event to sign up for",
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.Number,
+      name: "roleId",
+      description: "Role ID for the signup",
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.Number,
+      name: "eventShiftId",
+      description: "Shift ID for the signup",
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.Number,
+      name: "statusId",
+      description: "Signup status code ID (e.g., 2, 30). Required.",
+      optional: false,
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.Number,
+      name: "locationId",
+      description: "Location ID (for multi-location events)",
+      optional: true,
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.String,
+      name: "startTime",
+      description: "Start time (ISO format or HH:MM)",
+      optional: true,
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.String,
+      name: "endTime",
+      description: "End time (ISO format or HH:MM)",
+      optional: true,
+    }),
+  ],
+  resultType: coda.ValueType.Object,
+  schema: EventSignupSchema,
+  execute: async function ([vanId, eventId, roleId, eventShiftId, statusId, locationId, startTime, endTime], context) {
+    const signupData: any = {
+      person: { vanId: vanId.toString() },
+      event: { eventId },
+      role: { roleId },
+      shift: { eventShiftId },
+      status: { statusId },
+    };
+    if (locationId) {
+      signupData.location = { locationId };
+    }
+    if (startTime) {
+      signupData.startTime = startTime;
+    }
+    if (endTime) {
+      signupData.endTime = endTime;
+    }
+    const response = await context.fetcher.fetch({
+      method: "POST",
+      url: "https://api.securevan.com/v4/signups",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(signupData),
+    });
+    const eventSignupId = response.body;
+    // Fetch the created signup to return full details
+    const signupResponse = await context.fetcher.fetch({
+      method: "GET",
+      url: `https://api.securevan.com/v4/signups?eventId=${eventId}&vanId=${vanId}`,
+    });
+    const signups = signupResponse.body.items || [];
+    const signup = signups.find((s: any) => s.eventSignupId === eventSignupId);
+    if (signup) {
+      return mapEventSignup(signup);
+    }
+    // Fallback if we can't fetch the details
+    return {
+      eventSignupId,
+      personVanId: vanId,
+      personName: "Unknown",
+      eventId,
+      eventName: "Unknown",
+      eventShiftId,
+      shift: "Unknown",
+      roleId,
+      role: "Unknown",
+      statusId,
+      status: "Unknown",
+      locationId: locationId || null,
+      location: locationId ? "Unknown" : "",
+      startTime: startTime || "",
+      endTime: endTime || "",
+      dateCreated: new Date().toISOString(),
+      dateModified: new Date().toISOString(),
+    };
+  },
+});
+
+// Update EventSignup formula
+pack.addFormula({
+  name: "UpdateEventSignup",
+  description: "Update an existing event signup status in EveryAction",
+  isAction: true,
+  parameters: [
+    coda.makeParameter({
+      type: coda.ParameterType.Number,
+      name: "eventSignupId",
+      description: "ID of the event signup to update",
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.Number,
+      name: "personVanId",
+      description: "VAN ID of the person who signed up",
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.Number,
+      name: "eventId",
+      description: "ID of the event",
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.Number,
+      name: "eventShiftId",
+      description: "ID of the event shift",
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.Number,
+      name: "roleId",
+      description: "ID of the role",
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.Number,
+      name: "statusId",
+      description: "New signup status code ID (e.g., 2, 30)",
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.Number,
+      name: "locationId",
+      description: "ID of the location",
+    }),
+  ],
+  resultType: coda.ValueType.Object,
+  schema: EventSignupSchema,
+  execute: async function ([eventSignupId, personVanId, eventId, eventShiftId, roleId, statusId, locationId], context) {
+    const updateData: any = {
+      eventSignupId,
+      person: { vanId: personVanId.toString() },
+      event: { eventId },
+      shift: { eventShiftId },
+      role: { roleId },
+      status: { statusId },
+      location: { locationId },
+    };
+    await context.fetcher.fetch({
+      method: "PUT",
+      url: `https://api.securevan.com/v4/signups/${eventSignupId}`,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(updateData),
+    });
+    // Fetch the updated signup to return full details
+    const signupResponse = await context.fetcher.fetch({
+      method: "GET",
+      url: `https://api.securevan.com/v4/signups?eventId=${eventId}&vanId=${personVanId}`,
+    });
+    const signups = signupResponse.body.items || [];
+    const signup = signups.find((s: any) => s.eventSignupId === eventSignupId);
+    if (signup) {
+      return mapEventSignup(signup);
+    }
+    // Fallback if we can't fetch the details
+    return {
+      eventSignupId,
+      personVanId,
+      personName: "Unknown",
+      eventId,
+      eventName: "Unknown",
+      eventShiftId,
+      shift: "Unknown",
+      roleId,
+      role: "Unknown",
+      statusId,
+      status: "Unknown",
+      locationId: locationId || null,
+      location: locationId ? "Unknown" : "",
+      startTime: "",
+      endTime: "",
+      dateCreated: new Date().toISOString(),
+      dateModified: new Date().toISOString(),
+    };
+  },
+});
+
+// Delete EventSignup formula  
+pack.addFormula({
+  name: "DeleteEventSignup",
+  description: "Delete an event signup from EveryAction",
+  isAction: true,
+  parameters: [
+    coda.makeParameter({
+      type: coda.ParameterType.Number,
+      name: "eventSignupId",
+      description: "ID of the event signup to delete",
+    }),
+  ],
+  resultType: coda.ValueType.Object,
+  schema: coda.makeObjectSchema({
+    properties: {
+      eventSignupId: { type: coda.ValueType.Number },
+    },
+    idProperty: "eventSignupId",
+    displayProperty: "eventSignupId",
+  }),
+  execute: async function ([eventSignupId], context) {
+    await context.fetcher.fetch({
+      method: "DELETE",
+      url: `https://api.securevan.com/v4/signups/${eventSignupId}`,
+    });
+    // Return minimal object for Coda sync table row deletion
+    return { eventSignupId };
+  },
+});
+
+// Contacts sync table
+pack.addSyncTable({
+  name: "Contacts",
+  description: "Sync contacts from EveryAction",
+  identityName: "Contact",
+  schema: ContactSchema,
+  formula: {
+    name: "SyncContacts",
+    description: "Sync contacts from EveryAction",
+    parameters: [
+      coda.makeParameter({
+        type: coda.ParameterType.String,
+        name: "firstName",
+        description: "Filter by first name (required - matches contacts with first names starting with this value)",
+        optional: false,
+      }),
+      coda.makeParameter({
+        type: coda.ParameterType.String,
+        name: "lastName",
+        description: "Filter by last name (optional)",
+        optional: true,
+      }),
+      coda.makeParameter({
+        type: coda.ParameterType.String,
+        name: "email",
+        description: "Filter by email (optional - matches emails starting with this value)",
+        optional: true,
+      }),
+      coda.makeParameter({
+        type: coda.ParameterType.String,
+        name: "phoneNumber",
+        description: "Filter by phone number (optional)",
+        optional: true,
+      }),
+      coda.makeParameter({
+        type: coda.ParameterType.String,
+        name: "city",
+        description: "Filter by city (optional)",
+        optional: true,
+      }),
+      coda.makeParameter({
+        type: coda.ParameterType.String,
+        name: "stateOrProvince",
+        description: "Filter by state or province code (optional)",
+        optional: true,
+      }),
+      coda.makeParameter({
+        type: coda.ParameterType.String,
+        name: "zipOrPostalCode",
+        description: "Filter by ZIP or postal code (optional)",
+        optional: true,
+      }),
+      coda.makeParameter({
+        type: coda.ParameterType.String,
+        name: "contactMode",
+        description: "Filter by contact mode (Individual, Organization, etc.) (optional)",
+        optional: true,
+      }),
+    ],
+    execute: async function ([firstName, lastName, email, phoneNumber, city, stateOrProvince, zipOrPostalCode, contactMode], context) {
+      let url = "https://api.securevan.com/v4/people";
+      const queryParams = [];
+      
+      // firstName is required
+      if (firstName) {
+        queryParams.push(`firstName=${encodeURIComponent(firstName)}`);
+      }
+      
+      if (lastName) {
+        queryParams.push(`lastName=${encodeURIComponent(lastName)}`);
+      }
+      
+      if (email) {
+        queryParams.push(`email=${encodeURIComponent(email)}`);
+      }
+      
+      if (phoneNumber) {
+        queryParams.push(`phoneNumber=${encodeURIComponent(phoneNumber)}`);
+      }
+      
+      if (city) {
+        queryParams.push(`city=${encodeURIComponent(city)}`);
+      }
+      
+      if (stateOrProvince) {
+        queryParams.push(`stateOrProvince=${encodeURIComponent(stateOrProvince)}`);
+      }
+      
+      if (zipOrPostalCode) {
+        queryParams.push(`zipOrPostalCode=${encodeURIComponent(zipOrPostalCode)}`);
+      }
+      
+      if (contactMode) {
+        queryParams.push(`contactMode=${encodeURIComponent(contactMode)}`);
+      }
+      
+      // Add pagination
+      queryParams.push("$top=50");
+      if (context.sync.continuation) {
+        queryParams.push(`$skip=${context.sync.continuation.skip}`);
+      }
+      
+      // Add expansion for additional contact details
+      queryParams.push("$expand=Addresses,Districts,Emails,Phones");
+      
+      if (queryParams.length > 0) {
+        url += `?${queryParams.join('&')}`;
+      }
+      
+      const response = await context.fetcher.fetch({
+        method: "GET",
+        url: url,
+      });
+      
+      const data = response.body;
+      const contacts = data.items || [];
+      
+      const result = contacts.map((contact: any) => {
+        // Get primary address
+        const primaryAddress = contact.addresses?.find((addr: any) => addr.isPreferred) || contact.addresses?.[0];
+        
+        // Get primary email and phone
+        const primaryEmail = contact.emails?.find((email: any) => email.isPreferred) || contact.emails?.[0];
+        const primaryPhone = contact.phones?.find((phone: any) => phone.isPreferred) || contact.phones?.[0];
+        
+        return {
+          vanId: contact.vanId,
+          firstName: contact.firstName,
+          middleName: contact.middleName,
+          lastName: contact.lastName,
+          commonName: contact.commonName,
+          officialName: contact.officialName,
+          email: primaryEmail?.email,
+          phoneNumber: primaryPhone?.phoneNumber,
+          streetAddress: primaryAddress?.addressLine1,
+          city: primaryAddress?.city,
+          stateOrProvince: primaryAddress?.stateOrProvince,
+          zipOrPostalCode: primaryAddress?.zipOrPostalCode,
+          contactMode: contact.contactMode,
+          dateCreated: contact.dateCreated,
+          dateModified: contact.dateModified,
+        };
+      });
+      
+      let continuation;
+      if (data.nextPageLink) {
+        const skipMatch = data.nextPageLink.match(/\$skip=(\d+)/);
+        if (skipMatch) {
+          continuation = { skip: skipMatch[1] };
+        }
+      }
+      
+      return {
+        result,
+        continuation,
+      };
+    },
+  },
+});
+
+// Events sync table
+pack.addSyncTable({
+  name: "Events",
+  description: "Sync events from EveryAction",
+  identityName: "Event",
+  schema: EventSchema,
+  formula: {
+    name: "SyncEvents",
+    description: "Sync events from EveryAction",
+    parameters: [
+      coda.makeParameter({
+        type: coda.ParameterType.String,
+        name: "eventType",
+        description: "Filter by event type (optional)",
+        optional: true,
+      }),
+      coda.makeParameter({
+        type: coda.ParameterType.String,
+        name: "startDate",
+        description: "Filter events starting from this date (YYYY-MM-DD format, optional)",
+        optional: true,
+      }),
+    ],
+    execute: async function ([eventType, startDate], context) {
+      let url = "https://api.securevan.com/v4/events";
+      const queryParams = [];
+      
+      if (eventType) {
+        queryParams.push(`eventType=${encodeURIComponent(eventType)}`);
+      }
+      
+      if (startDate) {
+        queryParams.push(`startingAfter=${encodeURIComponent(startDate)}`);
+      }
+      
+      // Add pagination
+      queryParams.push("$top=50");
+      if (context.sync.continuation) {
+        queryParams.push(`$skip=${context.sync.continuation.skip}`);
+      }
+      
+      if (queryParams.length > 0) {
+        url += `?${queryParams.join('&')}`;
+      }
+      
+      const response = await context.fetcher.fetch({
+        method: "GET",
+        url: url,
+      });
+      
+      const data = response.body;
+      const events = data.items || [];
+      
+      const result = events.map((event: any) => ({
+        eventId: event.eventId,
+        name: event.name,
+        shortName: event.shortName,
+        description: event.description,
+        eventType: event.eventType?.name,
+        startDate: event.startDate,
+        endDate: event.endDate,
+        publicWebsiteUrl: event.publicWebsiteUrl,
+        voterRegistrationBatches: event.voterRegistrationBatches || [],
+        notes: event.notes,
+        dateCreated: event.dateCreated,
+        dateModified: event.dateModified,
+      }));
+      
+      let continuation;
+      if (data.nextPageLink) {
+        const skipMatch = data.nextPageLink.match(/\$skip=(\d+)/);
+        if (skipMatch) {
+          continuation = { skip: skipMatch[1] };
+        }
+      }
+      
+      return {
+        result,
+        continuation,
+      };
+    },
+  },
+});
+
+// EventSignups sync table (helper table, just IDs and core fields)
+pack.addSyncTable({
+  name: "EventSignups",
+  description: "Sync event signups from EveryAction (IDs and core fields only)",
+  identityName: "EventSignup",
+  schema: EventSignupSchema,
+  formula: {
+    name: "SyncEventSignups",
+    description: "Sync event signups from EveryAction (IDs and core fields only)",
+    parameters: [
+      coda.makeParameter({
+        type: coda.ParameterType.Number,
+        name: "eventId",
+        description: "Filter by specific event ID (optional)",
+        optional: true,
+      }),
+      coda.makeParameter({
+        type: coda.ParameterType.Number,
+        name: "vanId",
+        description: "Filter by specific person VAN ID (optional)",
+        optional: true,
+      }),
+      coda.makeParameter({
+        type: coda.ParameterType.String,
+        name: "status",
+        description: "Filter by signup status (optional)",
+        optional: true,
+      }),
+    ],
+    execute: async function ([eventId, vanId, status], context) {
+      if (!eventId && !vanId) {
+        throw new coda.UserVisibleError("Either eventId or vanId parameter must be specified");
+      }
+      let url = "https://api.securevan.com/v4/signups";
+      const queryParams = [];
+      if (eventId) {
+        queryParams.push(`eventId=${encodeURIComponent(eventId.toString())}`);
+      }
+      if (vanId) {
+        queryParams.push(`vanId=${encodeURIComponent(vanId.toString())}`);
+      }
+      // Add pagination
+      queryParams.push("$top=50");
+      if (context.sync.continuation) {
+        queryParams.push(`$skip=${context.sync.continuation.skip}`);
+      }
+      if (queryParams.length > 0) {
+        url += `?${queryParams.join('&')}`;
+      }
+      const response = await context.fetcher.fetch({
+        method: "GET",
+        url: url,
+      });
+      const data = response.body;
+      const signups = data.items || [];
+      const filteredSignups = status 
+        ? signups.filter((signup: any) => signup.status?.name === status)
+        : signups;
+      const result = filteredSignups.map(mapEventSignup);
+      let continuation;
+      if (data.nextPageLink) {
+        const skipMatch = data.nextPageLink.match(/\$skip=(\d+)/);
+        if (skipMatch) {
+          continuation = { skip: skipMatch[1] };
+        }
+      }
+      return {
+        result,
+        continuation,
+      };
+    },
+  },
+});
+
+// Locations sync table
+pack.addSyncTable({
+  name: "Locations",
+  description: "Sync locations from EveryAction",
+  identityName: "Location",
+  schema: LocationSchema,
+  formula: {
+    name: "SyncLocations",
+    description: "Sync locations from EveryAction",
+    parameters: [],
+    execute: async function ([], context) {
+      let url = "https://api.securevan.com/v4/locations?$top=50";
+      const response = await context.fetcher.fetch({
+        method: "GET",
+        url: url,
+      });
+      const data = response.body;
+      const locations = data.items || [];
+      const result = locations.map((loc: any) => ({
+        locationId: loc.locationId,
+        name: loc.name,
+        addressLine1: loc.addressLine1 || "",
+        addressLine2: loc.addressLine2 || "",
+        city: loc.city || "",
+        stateOrProvince: loc.stateOrProvince || "",
+        zipOrPostalCode: loc.zipOrPostalCode || "",
+        countryCode: loc.countryCode || "",
+        isAccessible: !!loc.isAccessible,
+        dateCreated: loc.dateCreated || "",
+        dateModified: loc.dateModified || "",
+      }));
+      let continuation;
+      if (data.nextPageLink) {
+        const skipMatch = data.nextPageLink.match(/\$skip=(\d+)/);
+        if (skipMatch) {
+          continuation = { skip: skipMatch[1] };
+        }
+      }
+      return {
+        result,
+        continuation,
+      };
+    },
+  },
+});
+
+// Add SignupDetails formula (fetches enriched details for a single eventSignupId)
+pack.addFormula({
+  name: "SignupDetails",
+  description: "Fetch enriched event signup details (including phone/email) for a given eventSignupId.",
+  parameters: [
+    coda.makeParameter({
+      type: coda.ParameterType.Number,
+      name: "eventSignupId",
+      description: "The eventSignupId to fetch details for.",
+    }),
+  ],
+  resultType: coda.ValueType.Object,
+  schema: SignupDetailsSchema,
+  execute: async function ([eventSignupId], context) {
+    const url = `https://api.securevan.com/v4/signups/${eventSignupId}?IncludePhoneAndEmail=true`;
+    const response = await context.fetcher.fetch({
+      method: "GET",
+      url,
+    });
+    const signup = response.body;
+    return {
+      eventSignupId: signup.eventSignupId,
+      personVanId: signup.person?.vanId,
+      personName: `${signup.person?.firstName || ''} ${signup.person?.lastName || ''}`.trim(),
+      personPhone: signup.person?.phones?.[0]?.phoneNumber || "",
+      personEmail: signup.person?.emails?.[0]?.email || "",
+      eventId: signup.event?.eventId,
+      eventName: signup.event?.name,
+      status: signup.status?.name,
+      statusId: signup.status?.statusId,
+      role: signup.role?.name,
+      roleId: signup.role?.roleId,
+      shift: signup.shift?.name,
+      eventShiftId: signup.shift?.eventShiftId,
+      startTime: signup.startTime,
+      endTime: signup.endTime,
+      location: signup.location?.name,
+      locationId: signup.location?.locationId,
+      dateCreated: signup.dateCreated,
+      dateModified: signup.dateModified,
+    };
+  },
+});
+
+// Add a formula to get a count of signups for an event by status
+pack.addFormula({
+  name: "GetEventSignupCount",
+  description: "Get the count of event signups for a given event and status.",
+  parameters: [
+    coda.makeParameter({
+      type: coda.ParameterType.Number,
+      name: "eventId",
+      description: "ID of the event to count signups for",
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.String,
+      name: "status",
+      description: "Signup status to count (e.g., Completed, Sched-Web, etc.)",
+    }),
+  ],
+  resultType: coda.ValueType.Number,
+  execute: async function ([eventId, status], context) {
+    let url = `https://api.securevan.com/v4/signups?eventId=${encodeURIComponent(eventId)}`;
+    // Use a high $top to get all signups in one call (API may have a max limit)
+    url += `&$top=1000`;
+    const response = await context.fetcher.fetch({
+      method: "GET",
+      url: url,
+    });
+    const signups = response.body.items || [];
+    // Count signups matching the given status (case-insensitive)
+    const count = signups.filter((s: any) => (s.status?.name || "").toLowerCase() === status.toLowerCase()).length;
+    return count;
+  },
+});
+
+// Add a formula to get a breakdown of signups for an event by status and total count
+pack.addFormula({
+  name: "GetEventSignupBreakdown",
+  description: "Get a breakdown of event signups for a given event, including total and per-status counts, or just for a specific status.",
+  parameters: [
+    coda.makeParameter({
+      type: coda.ParameterType.Number,
+      name: "eventId",
+      description: "ID of the event to get signup breakdown for",
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.String,
+      name: "status",
+      description: "(Optional) Signup status to count (e.g., Completed, Sched-Web, etc.). If provided, only the count for this status is returned.",
+      optional: true,
+    }),
+  ],
+  resultType: coda.ValueType.Object,
+  schema: coda.makeObjectSchema({
+    properties: {
+      total: { type: coda.ValueType.Number, description: "Total number of signups (or for the given status if specified)" },
+      breakdown: coda.makeObjectSchema({
+        properties: {},
+        description: "Breakdown of signups by status (dynamic keys, omitted if status is provided)"
+      }),
+      status: { type: coda.ValueType.String, description: "Status filter applied (if any)" },
+    },
+    displayProperty: "total",
+  }),
+  execute: async function ([eventId, status], context) {
+    let url = `https://api.securevan.com/v4/signups?eventId=${encodeURIComponent(eventId)}&$top=1000`;
+    const response = await context.fetcher.fetch({
+      method: "GET",
+      url: url,
+    });
+    const signups: any[] = response.body.items || [];
+    if (status) {
+      // Case-insensitive match for status
+      const filtered = signups.filter((s: any) => (s.status?.name || "").toLowerCase() === status.toLowerCase());
+      return {
+        total: filtered.length,
+        status,
+      };
+    } else {
+      const breakdown: Record<string, number> = {};
+      for (const s of signups) {
+        const st = (s.status?.name || "Unknown");
+        breakdown[st] = (breakdown[st] || 0) + 1;
+      }
+      return {
+        total: signups.length,
+        breakdown,
+      };
+    }
+  },
+});
+
+// Simple test formula for CLI validation
+pack.addFormula({
+  name: "TestEchoObject",
+  description: "Returns a static test object for CLI validation.",
+  parameters: [],
+  resultType: coda.ValueType.Object,
+  schema: coda.makeObjectSchema({
+    properties: {
+      foo: { type: coda.ValueType.String },
+      bar: { type: coda.ValueType.Number },
+    },
+    displayProperty: "foo",
+  }),
+  execute: async function () {
+    return { foo: "hello", bar: 42 };
+  },
+});
+
+// EventsStats sync table
+pack.addSyncTable({
+  name: "EventsStats",
+  description: "Aggregated statistics for each event, including total signups and counts by status.",
+  identityName: "EventStats",
+  schema: EventStatsSchema,
+  formula: {
+    name: "SyncEventsStats",
+    description: "Sync event statistics from EveryAction",
+    parameters: [],
+    execute: async function ([], context) {
+      let url = "https://api.securevan.com/v4/events?$top=50";
+      const response = await context.fetcher.fetch({
+        method: "GET",
+        url: url,
+      });
+      const data = response.body;
+      const events = data.items || [];
+      // For each event, fetch signups and aggregate status counts
+      const results = [];
+      for (const event of events) {
+        const eventId = event.eventId;
+        let signupsUrl = `https://api.securevan.com/v4/signups?eventId=${encodeURIComponent(eventId)}&$top=50`;
+        let allSignups: any[] = [];
+        let nextPage = true;
+        let signupsPageUrl = signupsUrl;
+        while (nextPage) {
+          const signupsResp = await context.fetcher.fetch({
+            method: "GET",
+            url: signupsPageUrl,
+          });
+          const signupsData = signupsResp.body;
+          const signups = signupsData.items || [];
+          allSignups = allSignups.concat(signups);
+          if (signupsData.nextPageLink) {
+            signupsPageUrl = signupsData.nextPageLink;
+          } else {
+            nextPage = false;
+          }
+        }
+        const statusCounts: Record<string, number> = {};
+        for (const s of allSignups) {
+          const status = (s.status?.name || "Unknown").toLowerCase();
+          statusCounts[status] = (statusCounts[status] || 0) + 1;
+        }
+        results.push({
+          eventId,
+          totalSignups: allSignups.length,
+          completed: statusCounts["completed"] || 0,
+          scheduled: statusCounts["scheduled"] || 0,
+          cancelled: statusCounts["cancelled"] || 0,
+          declined: statusCounts["declined"] || 0,
+          noShow: statusCounts["no-show"] || 0,
+          // Add more status columns as needed
+        });
+      }
+      return {
+        result: results,
+      };
+    },
+  },
+});
+
+export default pack;

@@ -1,0 +1,36 @@
+{
+  "name": "everyaction-coda-pack",
+  "version": "1.0.0",
+  "description": "A Coda Pack for integrating with EveryAction CRM via API calls.",
+  "main": "dist/pack.js",
+  "scripts": {
+    "build": "coda build src/pack.ts",
+    "execute": "coda execute src/pack.ts",
+    "release": "coda release src/pack.ts",
+    "validate": "coda validate src/pack.ts",
+    "upload": "coda upload src/pack.ts",
+    "whoami": "coda whoami",
+    "test": "npm run validate",
+    "dev": "coda execute src/pack.ts --watch"
+  },
+  "dependencies": {
+    "@codahq/packs-sdk": "^1.9.0"
+  },
+  "devDependencies": {
+    "@types/node": "^18.0.0",
+    "typescript": "^5.0.0"
+  },
+  "keywords": [
+    "coda",
+    "everyaction",
+    "crm",
+    "api",
+    "pack"
+  ],
+  "author": "Jim Baxley",
+  "license": "MIT",
+  "coda": {
+    "packId": 0,
+    "packVersion": "1"
+  }
+}

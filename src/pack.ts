@@ -1143,4 +1143,155 @@ pack.addSyncTable({
   },
 });
 
+// ActiveEventSignups sync table (for Published events from All Actions & Events table)
+pack.addSyncTable({
+  name: "ActiveEventSignups",
+  description: "Sync signups for published events from All Actions & Events table",
+  identityName: "ActiveEventSignup",
+  schema: EventSignupSchema,
+  formula: {
+    name: "SyncActiveEventSignups",
+    description: "Sync signups for events marked as Published in All Actions & Events table",
+    parameters: [
+      coda.makeParameter({
+        type: coda.ParameterType.String,
+        name: "publishedEventIds",
+        description: "Comma-separated EventIDs from Published events (from All Actions & Events table)",
+        optional: false,
+      }),
+    ],
+    execute: async function ([publishedEventIds], context) {
+      if (!publishedEventIds || publishedEventIds.trim() === "") {
+        return {
+          result: [],
+          continuation: undefined,
+        };
+      }
+      
+      // Parse the comma-separated event IDs
+      const eventIds = publishedEventIds.split(',')
+        .map(id => id.trim())
+        .filter(id => id.length > 0)
+        .map(id => parseInt(id))
+        .filter(id => !isNaN(id));
+      
+      if (eventIds.length === 0) {
+        return {
+          result: [],
+          continuation: undefined,
+        };
+      }
+      
+      console.log(`Syncing signups for ${eventIds.length} published events:`, eventIds);
+      
+      // Get signups for each published event using /signups API
+      const allSignups = [];
+      let hasMoreData = false;
+      
+      for (const eventId of eventIds) {
+        try {
+          let url = `https://api.securevan.com/v4/signups?eventId=${encodeURIComponent(eventId.toString())}`;
+          
+          // Add pagination
+          url += "&$top=50";
+          if (context.sync.continuation && context.sync.continuation[`event_${eventId}_skip`]) {
+            url += `&$skip=${context.sync.continuation[`event_${eventId}_skip`]}`;
+          }
+          
+          const signupsResponse = await context.fetcher.fetch({
+            method: "GET",
+            url: url,
+          });
+          
+          const data = signupsResponse.body;
+          const signups = data.items || [];
+          
+          if (signups.length > 0) {
+            allSignups.push(...signups.map(mapEventSignup));
+          }
+          
+          // Check if this event has more data
+          if (data.nextPageLink) {
+            hasMoreData = true;
+          }
+          
+          console.log(`Fetched ${signups.length} signups for event ${eventId}`);
+        } catch (error) {
+          console.log(`Error fetching signups for event ${eventId}:`, error);
+          // Continue with other events even if one fails
+        }
+      }
+      
+      console.log(`Total signups fetched: ${allSignups.length}`);
+      
+      // Simple continuation handling - if any event has more data, continue
+      let continuation;
+      if (hasMoreData) {
+        continuation = { hasMore: true };
+      }
+      
+      return {
+        result: allSignups,
+        continuation,
+      };
+    },
+  },
+});
+
+// HistoricalEventSignups sync table (for specific past events)
+pack.addSyncTable({
+  name: "HistoricalEventSignups",
+  description: "Retrieve signups for completed/past events",
+  identityName: "HistoricalEventSignup", 
+  schema: EventSignupSchema,
+  formula: {
+    name: "SyncHistoricalEventSignups",
+    description: "Sync signups for specific past events",
+    parameters: [
+      coda.makeParameter({
+        type: coda.ParameterType.Number,
+        name: "eventId",
+        description: "Specific event ID to retrieve signups for (required)",
+        optional: false,
+      }),
+    ],
+    execute: async function ([eventId], context) {
+      let url = `https://api.securevan.com/v4/signups?eventId=${encodeURIComponent(eventId.toString())}`;
+      
+      // Add pagination  
+      url += "&$top=50";
+      if (context.sync.continuation) {
+        url += `&$skip=${context.sync.continuation.skip}`;
+      }
+      
+      console.log(`Fetching historical signups for event ${eventId}`);
+      
+      const response = await context.fetcher.fetch({
+        method: "GET",
+        url: url,
+      });
+      
+      const data = response.body;
+      const signups = data.items || [];
+      
+      const result = signups.map(mapEventSignup);
+      
+      let continuation;
+      if (data.nextPageLink) {
+        const skipMatch = data.nextPageLink.match(/\$skip=(\d+)/);
+        if (skipMatch) {
+          continuation = { skip: parseInt(skipMatch[1]) };
+        }
+      }
+      
+      console.log(`Fetched ${result.length} historical signups for event ${eventId}`);
+      
+      return {
+        result,
+        continuation,
+      };
+    },
+  },
+});
+
 export default pack;

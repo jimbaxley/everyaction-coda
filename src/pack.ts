@@ -973,38 +973,6 @@ pack.addFormula({
   },
 });
 
-// Add a formula to get a count of signups for an event by status
-pack.addFormula({
-  name: "GetEventSignupCount",
-  description: "Get the count of event signups for a given event and status.",
-  parameters: [
-    coda.makeParameter({
-      type: coda.ParameterType.Number,
-      name: "eventId",
-      description: "ID of the event to count signups for",
-    }),
-    coda.makeParameter({
-      type: coda.ParameterType.String,
-      name: "status",
-      description: "Signup status to count (e.g., Completed, Sched-Web, etc.)",
-    }),
-  ],
-  resultType: coda.ValueType.Number,
-  execute: async function ([eventId, status], context) {
-    let url = `https://api.securevan.com/v4/signups?eventId=${encodeURIComponent(eventId)}`;
-    // Use a high $top to get all signups in one call (API may have a max limit)
-    url += `&$top=1000`;
-    const response = await context.fetcher.fetch({
-      method: "GET",
-      url: url,
-    });
-    const signups = response.body.items || [];
-    // Count signups matching the given status (case-insensitive)
-    const count = signups.filter((s: any) => (s.status?.name || "").toLowerCase() === status.toLowerCase()).length;
-    return count;
-  },
-});
-
 // Add a formula to get a breakdown of signups for an event by status and total count
 pack.addFormula({
   name: "GetEventSignupBreakdown",
@@ -1232,62 +1200,6 @@ pack.addSyncTable({
       
       return {
         result: allSignups,
-        continuation,
-      };
-    },
-  },
-});
-
-// HistoricalEventSignups sync table (for specific past events)
-pack.addSyncTable({
-  name: "HistoricalEventSignups",
-  description: "Retrieve signups for completed/past events",
-  identityName: "HistoricalEventSignup", 
-  schema: EventSignupSchema,
-  formula: {
-    name: "SyncHistoricalEventSignups",
-    description: "Sync signups for specific past events",
-    parameters: [
-      coda.makeParameter({
-        type: coda.ParameterType.Number,
-        name: "eventId",
-        description: "Specific event ID to retrieve signups for (required)",
-        optional: false,
-      }),
-    ],
-    execute: async function ([eventId], context) {
-      let url = `https://api.securevan.com/v4/signups?eventId=${encodeURIComponent(eventId.toString())}`;
-      
-      // Add pagination  
-      url += "&$top=50";
-      if (context.sync.continuation) {
-        url += `&$skip=${context.sync.continuation.skip}`;
-      }
-      
-      console.log(`Fetching historical signups for event ${eventId}`);
-      
-      const response = await context.fetcher.fetch({
-        method: "GET",
-        url: url,
-      });
-      
-      const data = response.body;
-      const signups = data.items || [];
-      
-      const result = signups.map(mapEventSignup);
-      
-      let continuation;
-      if (data.nextPageLink) {
-        const skipMatch = data.nextPageLink.match(/\$skip=(\d+)/);
-        if (skipMatch) {
-          continuation = { skip: parseInt(skipMatch[1]) };
-        }
-      }
-      
-      console.log(`Fetched ${result.length} historical signups for event ${eventId}`);
-      
-      return {
-        result,
         continuation,
       };
     },

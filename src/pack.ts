@@ -13,6 +13,8 @@ pack.setUserAuthentication({
   type: coda.AuthenticationType.WebBasic,
   instructionsUrl: "https://docs.ngpvan.com/docs/authentication",
   defaultConnectionRequirement: coda.ConnectionRequirement.Required, // Set default connection requirement for all formulas
+   networkDomain: "api.securevan.com", // <--- Add this line
+
   uxConfig: {
     placeholderUsername: "Application Name",
     placeholderPassword: "API Key",
@@ -34,6 +36,7 @@ pack.setUserAuthentication({
 });
 
 pack.addNetworkDomain("api.securevan.com");
+pack.addNetworkDomain("script.google.com");
 
 // Schemas are imported from separate files at the top of this file
 // No inline schema definitions needed - using imported ContactSchema, EventSchema, EventSignupSchema
@@ -1206,4 +1209,52 @@ pack.addSyncTable({
   },
 });
 
-export default pack;
+// Generic POST formula
+pack.addFormula({
+  name: "POST",
+  description: "Send a POST request to a specified URL with a JSON payload.",
+  isAction: true,
+  parameters: [
+    coda.makeParameter({
+      type: coda.ParameterType.String,
+      name: "url",
+      description: "The full URL of the request."
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.String,
+      name: "payload",
+      description: "A JSON string payload (use Object() and ToJSON() in Coda)."
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.String,
+      name: "token",
+      description: "(Optional) Bearer token for Authorization header.",
+      optional: true
+    }),
+  ],
+  resultType: coda.ValueType.String,
+  execute: async function (params, context) {
+    const [url, payload, token] = params;
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+
+    const request: coda.FetchRequest = {
+      url,
+      method: "POST",
+      headers,
+      body: payload,
+    };
+
+    let response = await context.fetcher.fetch(request);
+
+    if (response.status >= 200 && response.status < 300) {
+      return typeof response.body === "string" ? response.body : JSON.stringify(response.body);
+    }
+
+    return `Error: ${response.status} - ${response.body}`;
+  },
+});

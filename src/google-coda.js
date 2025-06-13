@@ -97,14 +97,15 @@ function combineSheetsAndPushToCoda() {
       
       // Process each row
       for (var i = 1; i < data.length; i++) {
-        // For Google Sheets
-        combined.push([sheetName].concat(data[i]));
-        
-        // For Coda (convert to proper format)
-        if (data[i][0] && data[i][0] !== "") { // Only if canvasser name exists
+        // Only process rows that have actual canvasser data
+        if (data[i][0] && data[i][0].toString().trim() !== "") {
+          // For Google Sheets Combined tab
+          combined.push([sheetName].concat(data[i]));
+          
+          // For Coda (convert to proper format)
           allResultsForCoda.push({
             eventId: sheetName,
-            canvasser: data[i][0] || '',
+            canvasser: data[i][0].toString().trim(),
             totalAttempts: data[i][1] || 0,
             canvassed: data[i][2] || 0
           });

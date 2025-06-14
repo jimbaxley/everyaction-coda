@@ -36,7 +36,6 @@ pack.setUserAuthentication({
 });
 
 pack.addNetworkDomain("api.securevan.com");
-pack.addNetworkDomain("script.google.com");
 
 // Schemas are imported from separate files at the top of this file
 // No inline schema definitions needed - using imported ContactSchema, EventSchema, EventSignupSchema
@@ -309,6 +308,110 @@ pack.addFormula({
     // return { eventId, eventShiftId };
 
     // Return just the event ID
+    return eventId;
+  },
+});
+
+// Update Event formula
+pack.addFormula({
+  name: "UpdateEvent",
+  description: "Update an existing event in EveryAction (start date, end date, and description). Preserves all other existing properties.",
+  isAction: true,
+  parameters: [
+    coda.makeParameter({
+      type: coda.ParameterType.Number,
+      name: "eventId",
+      description: "The Event ID to update",
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.String,
+      name: "startDate",
+      description: "Start date and time in ISO format (e.g., 2025-06-15T15:00:00-04:00)",
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.String,
+      name: "endDate",
+      description: "End date and time in ISO format (e.g., 2025-06-15T20:00:00-04:00)",
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.String,
+      name: "name",
+      description: "Event name",
+      optional: true,
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.String,
+      name: "description",
+      description: "Event description",
+      optional: true,
+    }),
+  ],
+  resultType: coda.ValueType.Number,
+  execute: async function ([eventId, startDate, endDate, name, description], context) {
+    
+    // Step 1: GET the existing event to preserve all properties
+    const getResponse = await context.fetcher.fetch({
+      method: "GET",
+      url: `https://api.securevan.com/v4/events/${eventId}?$expand=locations,codes,shifts,roles,notes,voterRegistrationBatches`,
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+
+    const existingEvent = getResponse.body;
+
+    // Step 2: Modify only the fields we want to update
+    const updatedEvent = {
+      ...existingEvent, // Preserve all existing properties
+      eventId: eventId, // Required identifier
+      startDate: startDate, // Update start date
+      endDate: endDate, // Update end date
+    };
+
+    // Update name if provided, otherwise keep existing
+    if (name !== undefined && name !== null) {
+      updatedEvent.name = name;
+    }
+
+    // Update description if provided, otherwise keep existing
+    if (description !== undefined && description !== null) {
+      updatedEvent.description = description;
+    }
+
+    // Handle required fields that can't be null
+    if (!updatedEvent.roles || updatedEvent.roles === null || updatedEvent.roles.length === 0) {
+      // Default role if none exists
+      updatedEvent.roles = [{
+        roleId: 1,
+        name: "Volunteer",
+        isEventLead: false
+      }];
+    }
+
+    if (!updatedEvent.shifts || updatedEvent.shifts === null || updatedEvent.shifts.length === 0) {
+      // Default shift if none exists
+      updatedEvent.shifts = [{
+        name: "Main Event",
+        startTime: startDate,
+        endTime: endDate
+      }];
+    }
+
+    // Ensure voterRegistrationBatches is an array
+    if (!updatedEvent.voterRegistrationBatches) {
+      updatedEvent.voterRegistrationBatches = [];
+    }
+
+    // Step 3: PUT the complete updated event
+    await context.fetcher.fetch({
+      method: "PUT",
+      url: `https://api.securevan.com/v4/events/${eventId}`,
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(updatedEvent),
+    });
+
     return eventId;
   },
 });

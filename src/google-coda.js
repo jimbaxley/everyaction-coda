@@ -82,21 +82,19 @@ function combineSheetsAndPushToCoda() {
   // Collect all data for both Google Sheets and Coda
   var allResultsForCoda = [];
   
+  // Always add header row first
+  combined.push(["EventID", "Canvasser", "Total Attempts", "Canvassed"]);
+  headerAdded = true;
+  
   sheets.forEach(function(sheet) {
     if (sheet.getName() === "Combined") return;
     
     var sheetName = sheet.getName();
     var data = sheet.getRange(7, 1, sheet.getLastRow(), 3).getValues(); // Only columns A-C
     
-    if (data.length > 1) {
-      // For Google Sheets Combined tab
-      if (!headerAdded) {
-        combined.push(["EventID"].concat(data[0])); // Add header row
-        headerAdded = true;
-      }
-      
-      // Process each row
-      for (var i = 1; i < data.length; i++) {
+    if (data.length > 0) {
+      // Process each row starting from row 7 (index 0 in our data array)
+      for (var i = 0; i < data.length; i++) {
         // Only process rows that have actual canvasser data
         if (data[i][0] && data[i][0].toString().trim() !== "") {
           // For Google Sheets Combined tab
@@ -119,6 +117,14 @@ function combineSheetsAndPushToCoda() {
   combinedSheet.clearContents();
   if (combined.length > 0) {
     combinedSheet.getRange(1, 1, combined.length, combined[0].length).setValues(combined);
+    
+    // Format header row
+    if (combined.length > 0) {
+      var headerRange = combinedSheet.getRange(1, 1, 1, combined[0].length);
+      headerRange.setFontWeight('bold');
+      headerRange.setBackground('#4285f4');
+      headerRange.setFontColor('white');
+    }
   }
   
   // Push to Coda

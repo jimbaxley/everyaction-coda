@@ -5,6 +5,7 @@ import { EventSignupSchema } from "./schemas/event-signup";
 import { SignupDetailsSchema } from "./schemas/signup-details";
 import { LocationSchema } from "./schemas/location";
 import { EventStatsSchema } from "./schemas/event-statistics";
+import { EventTypeSchema } from "./schemas/event-type";
 
 export const pack = coda.newPack();
 
@@ -989,10 +990,10 @@ pack.addSyncTable({
   },
 });
 
-// Locations sync table
+// Locations sync table (read-only)
 pack.addSyncTable({
   name: "Locations",
-  description: "Sync locations from EveryAction",
+  description: "Sync locations from EveryAction (read-only - use CreateLocation action to add new locations)",
   identityName: "Location",
   schema: LocationSchema,
   formula: {
@@ -1007,19 +1008,53 @@ pack.addSyncTable({
       });
       const data = response.body;
       const locations = data.items || [];
-      const result = locations.map((loc: any) => ({
-        locationId: loc.locationId,
-        name: loc.name,
-        addressLine1: loc.addressLine1 || "",
-        addressLine2: loc.addressLine2 || "",
-        city: loc.city || "",
-        stateOrProvince: loc.stateOrProvince || "",
-        zipOrPostalCode: loc.zipOrPostalCode || "",
-        countryCode: loc.countryCode || "",
-        isAccessible: !!loc.isAccessible,
-        dateCreated: loc.dateCreated || "",
-        dateModified: loc.dateModified || "",
-      }));
+      const result = locations.map((loc: any) => {
+        const address = loc.address;
+        
+        // Helper function to create full address string
+        const createFullAddress = () => {
+          if (!address) return "";
+          const parts = [
+            address.addressLine1,
+            address.addressLine2,
+            address.addressLine3,
+            address.unitNo
+          ].filter(Boolean);
+          
+          const streetAddress = parts.join(", ");
+          const cityStateZip = [
+            address.city,
+            address.stateOrProvince,
+            address.zipOrPostalCode
+          ].filter(Boolean).join(", ");
+          
+          return [streetAddress, cityStateZip].filter(Boolean).join(", ");
+        };
+        
+        return {
+          locationId: loc.locationId,
+          name: loc.name || "",
+          displayName: loc.displayName || loc.name || "",
+          addressLine1: address?.addressLine1 || "",
+          addressLine2: address?.addressLine2 || "",
+          addressLine3: address?.addressLine3 || "",
+          unitNo: address?.unitNo || "",
+          city: address?.city || "",
+          stateOrProvince: address?.stateOrProvince || "",
+          zipOrPostalCode: address?.zipOrPostalCode || "",
+          countryCode: address?.countryCode || "",
+          latitude: address?.geoLocation?.lat || null,
+          longitude: address?.geoLocation?.lon || null,
+          addressPreview: address?.preview || "",
+          addressDisplayMode: address?.displayMode || "",
+          isPreferred: address?.isPreferred || false,
+          isBest: address?.isBest || false,
+          notes: loc.notes || "",
+          codes: loc.codes ? (typeof loc.codes === 'string' ? loc.codes : JSON.stringify(loc.codes)) : "",
+          hasAddress: !!address,
+          fullAddress: createFullAddress(),
+        };
+      });
       let continuation;
       if (data.nextPageLink) {
         const skipMatch = data.nextPageLink.match(/\$skip=(\d+)/);
@@ -1035,7 +1070,7 @@ pack.addSyncTable({
   },
 });
 
-// Add SignupDetails formula (fetches enriched details for a single eventSignupId)
+// CreateLocation action formula (for quick location creation)
 pack.addFormula({
   name: "SignupDetails",
   description: "Fetch enriched event signup details (including phone/email) for a given eventSignupId.",
@@ -1361,3 +1396,233 @@ pack.addFormula({
     return `Error: ${response.status} - ${response.body}`;
   },
 });
+
+// EventTypes sync table
+pack.addSyncTable({
+  name: "EventTypes",
+  description: "Sync event types from EveryAction",
+  identityName: "EventType",
+  schema: EventTypeSchema,
+  formula: {
+    name: "SyncEventTypes",
+    description: "Sync event types from EveryAction",
+    parameters: [],
+    execute: async function ([], context) {
+      const url = "https://api.securevan.com/v4/events/types";
+      const response = await context.fetcher.fetch({
+        method: "GET",
+        url: url,
+      });
+      
+      const eventTypes = response.body || [];
+      
+      const result = eventTypes.map((eventType: any) => ({
+        eventTypeId: eventType.eventTypeId,
+        name: eventType.name,
+        canHaveMultipleShifts: eventType.canHaveMultipleShifts || false,
+        canHaveMultipleLocations: eventType.canHaveMultipleLocations || false,
+        canHaveGoals: eventType.canHaveGoals || false,
+        canHaveRoleMaximums: eventType.canHaveRoleMaximums || false,
+        canHaveRoleMinimums: eventType.canHaveRoleMinimums || false,
+        canBeRepeatable: eventType.canBeRepeatable || false,
+        color: eventType.color || "",
+        isAtLeastOneLocationRequired: eventType.isAtLeastOneLocationRequired || false,
+        defaultLocationId: eventType.defaultLocation?.locationId || null,
+        defaultLocationName: eventType.defaultLocation?.name || "",
+        isSharedWithMasterCommitteeByDefault: eventType.isSharedWithMasterCommitteeByDefault || false,
+        isSharedWithChildCommitteesByDefault: eventType.isSharedWithChildCommitteesByDefault || false,
+        isOnlineActionsAvailable: eventType.isOnlineActionsAvailable || false,
+        roles: eventType.roles || [],
+        statuses: eventType.statuses || [],
+        rolesText: (eventType.roles || []).map((role: any) => role.name).join(", "),
+        statusesText: (eventType.statuses || []).map((status: any) => status.name).join(", "),
+      }));
+      
+      return {
+        result,
+      };
+    },
+  },
+});
+
+// CreateLocation action formula (for quick location creation)
+pack.addFormula({
+  name: "CreateLocation",
+  description: "Create a new location in EveryAction",
+  isAction: true,
+  parameters: [
+    coda.makeParameter({
+      type: coda.ParameterType.String,
+      name: "name",
+      description: "Location name (required)",
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.String,
+      name: "addressLine1",
+      description: "Address line 1",
+      optional: true,
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.String,
+      name: "addressLine2",
+      description: "Address line 2",
+      optional: true,
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.String,
+      name: "city",
+      description: "City",
+      optional: true,
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.String,
+      name: "stateOrProvince",
+      description: "State or province",
+      optional: true,
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.String,
+      name: "zipOrPostalCode",
+      description: "ZIP or postal code",
+      optional: true,
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.String,
+      name: "countryCode",
+      description: "Country code (default: US)",
+      optional: true,
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.String,
+      name: "notes",
+      description: "Location notes",
+      optional: true,
+    }),
+  ],
+  resultType: coda.ValueType.Object,
+  schema: LocationSchema,
+  execute: async function ([name, addressLine1, addressLine2, city, stateOrProvince, zipOrPostalCode, countryCode, notes], context) {
+    // Build the findOrCreate payload for EveryAction API
+    const findOrCreateData: any = {
+      name: name || "Campaign HQ", // Default name as per API docs
+    };
+    
+    // Add address data if any address field is provided
+    if (addressLine1 || city || stateOrProvince || zipOrPostalCode) {
+      findOrCreateData.address = {
+        addressLine1: addressLine1 || "",
+        city: city || "",
+        stateOrProvince: stateOrProvince || "",
+        zipOrPostalCode: zipOrPostalCode || "",
+      };
+      
+      // Only add addressLine2 if provided (not in the API example)
+      if (addressLine2) {
+        findOrCreateData.address.addressLine2 = addressLine2;
+      }
+      
+      // Add country code if provided, otherwise don't include it
+      if (countryCode) {
+        findOrCreateData.address.countryCode = countryCode;
+      }
+    }
+    
+    // Use the findOrCreate endpoint
+    const response = await context.fetcher.fetch({
+      method: "POST",
+      url: "https://api.securevan.com/v4/locations/findOrCreate",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(findOrCreateData),
+    });
+    
+    // The findOrCreate endpoint returns the location object directly
+    const location = response.body;
+    
+    if (!location || !location.locationId) {
+      throw new coda.UserVisibleError("Could not create or find location - invalid response from EveryAction API");
+    }
+    
+    // If notes were provided and this is a newly created location, update it with notes
+    // (findOrCreate doesn't support notes parameter directly)
+    if (notes && notes.trim()) {
+      try {
+        const updatePayload = {
+          name: location.name,
+          displayName: location.displayName || location.name,
+          notes: notes,
+          address: location.address
+        };
+        
+        await context.fetcher.fetch({
+          method: "PUT",
+          url: `https://api.securevan.com/v4/locations/${location.locationId}`,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(updatePayload),
+        });
+        
+        // Fetch the updated location
+        const updatedResponse = await context.fetcher.fetch({
+          method: "GET",
+          url: `https://api.securevan.com/v4/locations/${location.locationId}`,
+        });
+        
+        const updatedLocation = updatedResponse.body;
+        return mapLocationResponse(updatedLocation);
+      } catch (error) {
+        // If notes update fails, return the location without notes
+        console.warn("Failed to add notes to location:", error);
+      }
+    }
+    
+    return mapLocationResponse(location);
+  },
+});
+
+// Helper function to map location response to schema format
+function mapLocationResponse(location: any) {
+  const address = location.address;
+  
+  // Helper function to create full address string
+  const createFullAddress = () => {
+    if (!address) return "";
+    const parts = [
+      address.addressLine1,
+      address.addressLine2,
+      address.addressLine3,
+      address.unitNo
+    ].filter(Boolean);
+    
+    const streetAddress = parts.join(", ");
+    const cityStateZip = [
+      address.city,
+      address.stateOrProvince,
+      address.zipOrPostalCode
+    ].filter(Boolean).join(", ");
+    
+    return [streetAddress, cityStateZip].filter(Boolean).join(", ");
+  };
+
+  return {
+    locationId: location.locationId,
+    name: location.name || "",
+    displayName: location.displayName || location.name || "",
+    addressLine1: address?.addressLine1 || "",
+    addressLine2: address?.addressLine2 || "",
+    addressLine3: address?.addressLine3 || "",
+    unitNo: address?.unitNo || "",
+    city: address?.city || "",
+    stateOrProvince: address?.stateOrProvince || "",
+    zipOrPostalCode: address?.zipOrPostalCode || "",
+    countryCode: address?.countryCode || "",
+    latitude: address?.geoLocation?.lat || null,
+    longitude: address?.geoLocation?.lon || null,
+    addressPreview: address?.preview || "",
+    addressDisplayMode: address?.displayMode || "",
+    isPreferred: address?.isPreferred || false,
+    isBest: address?.isBest || false,
+    notes: location.notes || "",
+    codes: location.codes ? (typeof location.codes === 'string' ? location.codes : JSON.stringify(location.codes)) : "",
+    hasAddress: !!address,
+    fullAddress: createFullAddress(),
+  };
+}

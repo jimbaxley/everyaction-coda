@@ -916,15 +916,15 @@ pack.addSyncTable({
   },
 });
 
-// EventSignups sync table (helper table, just IDs and core fields)
+// SingleEventSignups sync table (helper table, just IDs and core fields)
 pack.addSyncTable({
-  name: "EventSignups",
-  description: "Sync event signups from EveryAction (IDs and core fields only)",
-  identityName: "EventSignup",
+  name: "SingleEventSignups",
+  description: "Sync event signups from EveryAction for a single event (IDs and core fields only)",
+  identityName: "SingleEventSignup",
   schema: EventSignupSchema,
   formula: {
-    name: "SyncEventSignups",
-    description: "Sync event signups from EveryAction (IDs and core fields only)",
+    name: "SyncSingleEventSignups",
+    description: "Sync event signups from EveryAction for a single event (IDs and core fields only)",
     parameters: [
       coda.makeParameter({
         type: coda.ParameterType.Number,
@@ -1001,7 +1001,7 @@ pack.addSyncTable({
     description: "Sync locations from EveryAction",
     parameters: [],
     execute: async function ([], context) {
-      let url = "https://api.securevan.com/v4/locations?$top=50";
+      let url = "https://api.securevan.com/v4/locations";
       const response = await context.fetcher.fetch({
         method: "GET",
         url: url,

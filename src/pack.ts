@@ -1189,160 +1189,396 @@ pack.addFormula({
   },
 });
 
-// EventsStats sync table
+// Helper function to compute event stats (reusable)
+async function computeEventStats(event: any, context: any) {
+  const eventId = event.eventId;
+  
+  // Fetch all signups for this event
+  let signupsUrl = `https://api.securevan.com/v4/signups?eventId=${eventId}&$top=200`;
+  let allSignups: any[] = [];
+  let nextPage = true;
+  
+  while (nextPage) {
+    const signupsResp = await context.fetcher.fetch({
+      method: "GET",
+      url: signupsUrl,
+    });
+    
+    const signupsData = signupsResp.body;
+    const signups = signupsData.items || [];
+    allSignups = allSignups.concat(signups);
+    
+    if (signupsData.nextPageLink) {
+      signupsUrl = signupsData.nextPageLink;
+    } else {
+      nextPage = false;
+    }
+  }
+  
+  // Compute status counts
+  const statusCounts: Record<string, number> = {};
+  for (const signup of allSignups) {
+    const status = (signup.status?.name || "Unknown").toLowerCase();
+    statusCounts[status] = (statusCounts[status] || 0) + 1;
+  }
+  
+  // Build the result object with base fields and hardcoded status columns
+  const result = {
+    eventId,
+    eventName: event.name,
+    eventType: event.eventType?.name,
+    startDate: event.startDate,
+    endDate: event.endDate,
+    totalSignups: allSignups.length,
+    completed: statusCounts['completed'] || 0,
+    schedweb: statusCounts['sched-web'] || 0,
+    declined: statusCounts['declined'] || 0,
+    noshow: statusCounts['no show'] || 0,
+  };
+  
+  return result;
+}
+
+// Current Events - Active events with computed stats
 pack.addSyncTable({
-  name: "EventsStats",
-  description: "Aggregated statistics for each event, including total signups and counts by status.",
-  identityName: "EventStats",
+  name: "CurrentEvents",
+  description: "Sync current/upcoming events with computed signup statistics",
+  identityName: "CurrentEvent",
   schema: EventStatsSchema,
   formula: {
-    name: "SyncEventsStats",
-    description: "Sync event statistics from EveryAction",
-    parameters: [],
-    execute: async function ([], context) {
-      let url = "https://api.securevan.com/v4/events?$top=50";
-      const response = await context.fetcher.fetch({
-        method: "GET",
-        url: url,
-      });
-      const data = response.body;
-      const events = data.items || [];
-      // For each event, fetch signups and aggregate status counts
-      const results = [];
-      for (const event of events) {
-        const eventId = event.eventId;
-        let signupsUrl = `https://api.securevan.com/v4/signups?eventId=${encodeURIComponent(eventId)}&$top=50`;
-        let allSignups: any[] = [];
-        let nextPage = true;
-        let signupsPageUrl = signupsUrl;
-        while (nextPage) {
-          const signupsResp = await context.fetcher.fetch({
-            method: "GET",
-            url: signupsPageUrl,
-          });
-          const signupsData = signupsResp.body;
-          const signups = signupsData.items || [];
-          allSignups = allSignups.concat(signups);
-          if (signupsData.nextPageLink) {
-            signupsPageUrl = signupsData.nextPageLink;
-          } else {
-            nextPage = false;
-          }
-        }
-        const statusCounts: Record<string, number> = {};
-        for (const s of allSignups) {
-          const status = (s.status?.name || "Unknown").toLowerCase();
-          statusCounts[status] = (statusCounts[status] || 0) + 1;
-        }
-        results.push({
-          eventId,
-          totalSignups: allSignups.length,
-          completed: statusCounts["completed"] || 0,
-          scheduled: statusCounts["scheduled"] || 0,
-          cancelled: statusCounts["cancelled"] || 0,
-          declined: statusCounts["declined"] || 0,
-          noShow: statusCounts["no-show"] || 0,
-          // Add more status columns as needed
-        });
+    name: "SyncCurrentEvents",
+    description: "Sync current events with signup statistics",
+    parameters: [
+      coda.makeParameter({
+        type: coda.ParameterType.StringArray,
+        name: "eventIds",
+        description: "List of current event IDs to sync (from helper table/control)",
+        optional: false,
+      }),
+    ],
+    execute: async function ([eventIds], context) {
+      if (!eventIds || eventIds.length === 0) {
+        return { result: [] };
       }
-      return {
+      
+      // Filter out empty strings and invalid event IDs
+      const validEventIds = eventIds
+        .filter(id => id && id.trim() !== '')  // Remove empty strings
+        .map(id => parseInt(id.trim()))        // Parse as integers
+        .filter(id => !isNaN(id) && id > 0);   // Remove invalid numbers
+      
+      console.log(`Syncing ${validEventIds.length} current events (filtered from ${eventIds.length}):`, validEventIds);
+      
+      if (validEventIds.length === 0) {
+        console.log("No valid event IDs found after filtering");
+        return { result: [] };
+      }
+      
+      const results = [];
+      const errors = [];
+      
+      for (const eventId of validEventIds) {
+        try {
+          // Get event details
+          const eventResponse = await context.fetcher.fetch({
+            method: "GET",
+            url: `https://api.securevan.com/v4/events/${eventId}`,
+          });
+          
+          // Check for HTTP error status codes
+          if (eventResponse.status === 404) {
+            console.log(`Event ${eventId} not found (404)`);
+            errors.push(`Event ${eventId}: Not found (404)`);
+            continue;
+          }
+          
+          if (eventResponse.status >= 400) {
+            console.log(`Event ${eventId} returned HTTP ${eventResponse.status}`);
+            errors.push(`Event ${eventId}: HTTP ${eventResponse.status}`);
+            continue;
+          }
+          
+          if (!eventResponse.body || !eventResponse.body.eventId) {
+            console.log(`Event ${eventId} returned invalid response body`);
+            errors.push(`Event ${eventId}: Invalid response body`);
+            continue;
+          }
+          
+          const event = eventResponse.body;
+          
+          // Compute signup stats for this event
+          const stats = await computeEventStats(event, context);
+          results.push(stats);
+          
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          console.log(`Error processing current event ${eventId}: ${errorMessage}`);
+          errors.push(`Event ${eventId}: ${errorMessage}`);
+          
+          // Continue with other events even if one fails
+        }
+      }
+      
+      console.log(`Successfully processed ${results.length} current events`);
+      if (errors.length > 0) {
+        console.log(`Errors encountered: ${errors.join('; ')}`);
+      }
+      
+      return { result: results };
+    },
+  },
+});
+
+// Historical Events - Past events with cached stats
+pack.addSyncTable({
+  name: "HistoricalEvents",
+  description: "Historical events with finalized statistics (less frequent updates)",
+  identityName: "HistoricalEvent", 
+  schema: EventStatsSchema,
+  formula: {
+    name: "SyncHistoricalEvents",
+    description: "Sync historical events with signup statistics",
+    parameters: [
+      coda.makeParameter({
+        type: coda.ParameterType.StringArray,
+        name: "eventIds",
+        description: "List of historical event IDs to sync (from helper table/control)",
+        optional: false,
+      }),
+    ],
+    execute: async function ([eventIds], context) {
+      if (!eventIds || eventIds.length === 0) {
+        return { result: [] };
+      }
+      
+      // Filter out empty strings and invalid event IDs
+      const validEventIds = eventIds
+        .filter(id => id && id.trim() !== '')  // Remove empty strings
+        .map(id => parseInt(id.trim()))        // Parse as integers
+        .filter(id => !isNaN(id) && id > 0);   // Remove invalid numbers
+      
+      console.log(`Processing ${validEventIds.length} historical events (filtered from ${eventIds.length})`);
+      
+      if (validEventIds.length === 0) {
+        console.log("No valid event IDs found after filtering");
+        return { result: [] };
+      }
+      
+      // Get starting position from continuation
+      const startIndex = context.sync.continuation?.currentIndex || 0;
+      const batchSize = 3; // Smaller batch size to avoid timeouts
+      const maxProcessingTime = 25000; // 25 seconds max processing time
+      const startTime = Date.now();
+      
+      console.log(`Starting from index ${startIndex}, processing up to ${batchSize} events at a time`);
+      
+      const results = [];
+      const errors = [];
+      let currentIndex = startIndex;
+      
+      // Process events with time limits and continuation
+      while (currentIndex < validEventIds.length) {
+        // Check if we're approaching timeout
+        if (Date.now() - startTime > maxProcessingTime) {
+          console.log(`Approaching timeout at index ${currentIndex}, stopping to continue later`);
+          break;
+        }
+        
+        const endIndex = Math.min(currentIndex + batchSize, validEventIds.length);
+        const batch = validEventIds.slice(currentIndex, endIndex);
+        
+        console.log(`Processing batch: events ${currentIndex + 1}-${endIndex} of ${validEventIds.length}`);
+        
+        for (const eventId of batch) {
+          // Check timeout before each event
+          if (Date.now() - startTime > maxProcessingTime) {
+            console.log(`Timeout reached at event ${eventId}, stopping`);
+            break;
+          }
+          
+          try {
+            // Get event details
+            const eventResponse = await context.fetcher.fetch({
+              method: "GET",
+              url: `https://api.securevan.com/v4/events/${eventId}`,
+            });
+            
+            // Check for HTTP error status codes
+            if (eventResponse.status === 404) {
+              console.log(`Event ${eventId} not found (404)`);
+              errors.push(`Event ${eventId}: Not found (404)`);
+              currentIndex++;
+              continue;
+            }
+            
+            if (eventResponse.status >= 400) {
+              console.log(`Event ${eventId} returned HTTP ${eventResponse.status}`);
+              errors.push(`Event ${eventId}: HTTP ${eventResponse.status}`);
+              currentIndex++;
+              continue;
+            }
+            
+            if (!eventResponse.body || !eventResponse.body.eventId) {
+              console.log(`Event ${eventId} returned invalid response body`);
+              errors.push(`Event ${eventId}: Invalid response body`);
+              currentIndex++;
+              continue;
+            }
+            
+            const event = eventResponse.body;
+            
+            // Compute signup stats for this event
+            const stats = await computeEventStats(event, context);
+            results.push(stats);
+            
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            console.log(`Error processing historical event ${eventId}: ${errorMessage}`);
+            errors.push(`Event ${eventId}: ${errorMessage}`);
+            
+            // Continue with other events even if one fails
+          }
+          
+          currentIndex++;
+        }
+        
+        // If we processed a full batch and still have time, continue
+        if (currentIndex >= endIndex && Date.now() - startTime <= maxProcessingTime) {
+          continue;
+        } else {
+          // Either timeout or finished batch
+          break;
+        }
+      }
+      
+      console.log(`Successfully processed ${results.length} historical events (${currentIndex - startIndex} events in this run)`);
+      if (errors.length > 0) {
+        console.log(`Errors encountered: ${errors.join('; ')}`);
+      }
+      
+      // Set continuation if we haven't processed all events
+      let continuation;
+      if (currentIndex < validEventIds.length) {
+        continuation = { currentIndex };
+        console.log(`Continuation set for next run starting at index ${currentIndex}`);
+      } else {
+        console.log("All historical events processed successfully");
+      }
+      
+      return { 
         result: results,
+        continuation 
       };
     },
   },
 });
 
-// ActiveEventSignups sync table (for Published events from All Actions & Events table)
+// EventsStats sync table
+// ActiveEventSignups sync table (for current events only - preserves historical data via identity)
 pack.addSyncTable({
   name: "ActiveEventSignups",
-  description: "Sync signups for published events from All Actions & Events table",
-  identityName: "ActiveEventSignup",
+  description: "Sync signups for current events only (preserves historical signup data)",
+  identityName: "EventSignup",
   schema: EventSignupSchema,
   formula: {
     name: "SyncActiveEventSignups",
-    description: "Sync signups for events marked as Published in All Actions & Events table",
+    description: "Sync signups for current events specified in eventIds parameter",
     parameters: [
       coda.makeParameter({
-        type: coda.ParameterType.String,
-        name: "publishedEventIds",
-        description: "Comma-separated EventIDs from Published events (from All Actions & Events table)",
+        type: coda.ParameterType.StringArray,
+        name: "eventIds",
+        description: "List of current event IDs to sync signups for (from CurrentEvents helper)",
         optional: false,
       }),
     ],
-    execute: async function ([publishedEventIds], context) {
-      if (!publishedEventIds || publishedEventIds.trim() === "") {
-        return {
-          result: [],
-          continuation: undefined,
-        };
+    execute: async function ([eventIds], context) {
+      if (!eventIds || eventIds.length === 0) {
+        return { result: [] };
       }
       
-      // Parse the comma-separated event IDs
-      const eventIds = publishedEventIds.split(',')
-        .map(id => id.trim())
-        .filter(id => id.length > 0)
-        .map(id => parseInt(id))
-        .filter(id => !isNaN(id));
+      // Filter and validate event IDs
+      const validEventIds = eventIds
+        .filter(id => id && id.trim() !== '')
+        .map(id => parseInt(id.trim()))
+        .filter(id => !isNaN(id) && id > 0);
       
-      if (eventIds.length === 0) {
-        return {
-          result: [],
-          continuation: undefined,
-        };
+      if (validEventIds.length === 0) {
+        return { result: [] };
       }
       
-      console.log(`Syncing signups for ${eventIds.length} published events:`, eventIds);
+      console.log(`Syncing signups for ${validEventIds.length} current events:`, validEventIds);
       
-      // Get signups for each published event using /signups API
       const allSignups = [];
-      let hasMoreData = false;
+      const errors = [];
       
-      for (const eventId of eventIds) {
+      // Fetch signups for each current event
+      for (const eventId of validEventIds) {
         try {
-          let url = `https://api.securevan.com/v4/signups?eventId=${encodeURIComponent(eventId.toString())}`;
+          let signupsUrl = `https://api.securevan.com/v4/signups?eventId=${eventId}&$top=200`;
           
-          // Add pagination
-          url += "&$top=50";
-          if (context.sync.continuation && context.sync.continuation[`event_${eventId}_skip`]) {
-            url += `&$skip=${context.sync.continuation[`event_${eventId}_skip`]}`;
+          // Pagination for this event
+          let nextPage = true;
+          while (nextPage) {
+            const response = await context.fetcher.fetch({
+              method: "GET",
+              url: signupsUrl,
+            });
+            
+            const signupsData = response.body;
+            const signups = signupsData.items || [];
+            
+            // Map signups with enhanced data for historical preservation
+            const mappedSignups = signups.map((signup: any) => {
+              return {
+                eventSignupId: signup.eventSignupId,
+                personVanId: signup.person?.vanId,
+                personName: signup.person ? `${signup.person.firstName || ''} ${signup.person.lastName || ''}`.trim() : '',
+                eventId: signup.event?.eventId,
+                eventName: signup.event?.name,
+                eventShiftId: signup.shift?.eventShiftId,
+                shift: signup.shift?.name,
+                roleId: signup.role?.roleId,
+                role: signup.role?.name,
+                statusId: signup.status?.statusId,
+                status: signup.status?.name,
+                locationId: signup.location?.locationId,
+                location: signup.location?.name,
+                startTime: signup.startTime || signup.startTimeOverride || '',
+                endTime: signup.endTime || signup.endTimeOverride || '',
+                dateCreated: signup.dateCreated || '',
+                dateModified: signup.dateModified || '',
+                // Add event context for historical reference
+                eventStartDate: signup.event?.startDate || '',
+                eventEndDate: signup.event?.endDate || '',
+                eventType: signup.event?.eventType?.name || '',
+                syncedAt: new Date().toISOString(), // Track when this was last synced
+              };
+            });
+            
+            allSignups.push(...mappedSignups);
+            
+            if (signupsData.nextPageLink) {
+              signupsUrl = signupsData.nextPageLink;
+            } else {
+              nextPage = false;
+            }
           }
           
-          const signupsResponse = await context.fetcher.fetch({
-            method: "GET",
-            url: url,
-          });
+          console.log(`Fetched ${allSignups.filter(s => s.eventId === eventId).length} signups for event ${eventId}`);
           
-          const data = signupsResponse.body;
-          const signups = data.items || [];
-          
-          if (signups.length > 0) {
-            allSignups.push(...signups.map(mapEventSignup));
-          }
-          
-          // Check if this event has more data
-          if (data.nextPageLink) {
-            hasMoreData = true;
-          }
-          
-          console.log(`Fetched ${signups.length} signups for event ${eventId}`);
         } catch (error) {
-          console.log(`Error fetching signups for event ${eventId}:`, error);
-          // Continue with other events even if one fails
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          console.log(`Error fetching signups for event ${eventId}:`, errorMessage);
+          errors.push(`Event ${eventId}: ${errorMessage}`);
         }
       }
       
-      console.log(`Total signups fetched: ${allSignups.length}`);
-      
-      // Simple continuation handling - if any event has more data, continue
-      let continuation;
-      if (hasMoreData) {
-        continuation = { hasMore: true };
+      console.log(`Total signups synced: ${allSignups.length}`);
+      if (errors.length > 0) {
+        console.log(`Errors encountered: ${errors.join('; ')}`);
       }
       
-      return {
-        result: allSignups,
-        continuation,
-      };
+      return { result: allSignups };
     },
   },
 });

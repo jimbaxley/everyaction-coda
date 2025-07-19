@@ -3,15 +3,25 @@ import * as coda from "@codahq/packs-sdk";
 export const EventStatsSchema = coda.makeObjectSchema({
   properties: {
     eventId: { type: coda.ValueType.Number, description: "ID of the event" },
+    eventName: { type: coda.ValueType.String, description: "Name of the event" },
+    eventType: { type: coda.ValueType.String, description: "Type of event" },
+    startDate: { 
+      type: coda.ValueType.String, 
+      codaType: coda.ValueHintType.DateTime,
+      description: "Event start date" 
+    },
+    endDate: { 
+      type: coda.ValueType.String, 
+      codaType: coda.ValueHintType.DateTime,
+      description: "Event end date" 
+    },
     totalSignups: { type: coda.ValueType.Number, description: "Total number of signups for the event" },
     completed: { type: coda.ValueType.Number, description: "Number of Completed signups" },
-    scheduled: { type: coda.ValueType.Number, description: "Number of Scheduled signups" },
-    cancelled: { type: coda.ValueType.Number, description: "Number of Cancelled signups" },
+    schedweb: { type: coda.ValueType.Number, description: "Number of Sched-Web signups" },
     declined: { type: coda.ValueType.Number, description: "Number of Declined signups" },
-    noShow: { type: coda.ValueType.Number, description: "Number of No-Show signups" },
-    // Add more status columns as needed
+    noshow: { type: coda.ValueType.Number, description: "Number of No Show signups" },
   },
-  displayProperty: "eventId",
+  displayProperty: "eventName",
   idProperty: "eventId",
-  featuredProperties: ["eventId", "totalSignups", "completed", "scheduled", "cancelled", "declined", "noShow"],
+  featuredProperties: ["eventName", "eventType", "startDate", "totalSignups", "completed", "schedweb"],
 });

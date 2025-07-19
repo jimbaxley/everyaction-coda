@@ -7,6 +7,8 @@ function onOpen() {
     .addSeparator()
     .addItem('🔄 Run Sync Now', 'manualSync')
     .addItem('📊 Check Sync Status', 'checkSyncStatus')
+    .addSeparator()
+    .addItem('⚙️ Setup Sync Mode Dropdowns', 'setupSyncModeDropdowns')
     .addToUi();
 }
 
@@ -68,8 +70,21 @@ function combineSheetsAndPushToCoda() {
     return;
   }
   
-  // Add a small delay at the start to let rapid changes settle
-  Utilities.sleep(1000);
+  // Add execution lock to prevent multiple simultaneous runs
+  var lockKey = 'SYNC_LOCK';
+  var isLocked = PropertiesService.getScriptProperties().getProperty(lockKey);
+  
+  if (isLocked === 'true') {
+    console.log('Sync already running. Skipping duplicate execution.');
+    return;
+  }
+  
+  // Set lock
+  PropertiesService.getScriptProperties().setProperty(lockKey, 'true');
+  
+  try {
+    // Add a small delay at the start to let rapid changes settle
+    Utilities.sleep(1000);
   
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheets = ss.getSheets();
@@ -90,6 +105,19 @@ function combineSheetsAndPushToCoda() {
   var lastEditedSheetName = activeSheet ? activeSheet.getName() : null;
   
   console.log(`Last edited sheet detected: ${lastEditedSheetName}`);
+  
+  // Check if the active sheet is in SYNC mode - if not, exit early
+  if (lastEditedSheetName && lastEditedSheetName !== "Combined") {
+    var activeSheetSyncCell = activeSheet.getRange("F1");
+    var activeSheetSyncValue = activeSheetSyncCell.getValue();
+    
+    if (activeSheetSyncValue !== "SYNC") {
+      console.log(`Active sheet ${lastEditedSheetName} sync mode is: ${activeSheetSyncValue} - skipping entire sync`);
+      return;
+    }
+    
+    console.log(`Active sheet ${lastEditedSheetName} is in SYNC mode - proceeding with sync`);
+  }
   
   // Always add header row first for combined sheet
   combined.push(["EventID", "Canvasser", "Total Attempts", "Canvassed"]);
@@ -135,7 +163,7 @@ function combineSheetsAndPushToCoda() {
   // Update Google Sheets Combined tab (always do this)
   updateCombinedSheet(combined);
   
-  // Only update Coda for the last edited sheet
+  // Only update Coda for the last edited sheet (which we already confirmed is in SYNC mode)
   if (lastEditedSheetName && lastEditedSheetName !== "Combined") {
     if (editedSheetResults.length > 0) {
       console.log(`Updating Coda for edited event: ${lastEditedSheetName} with ${editedSheetResults.length} results`);
@@ -144,8 +172,18 @@ function combineSheetsAndPushToCoda() {
       console.log(`Clearing Coda data for edited event: ${lastEditedSheetName} (no data found)`);
       clearCodaForEvent(lastEditedSheetName);
     }
+    
+    // Reset the sync mode back to "EDIT" after successful sync
+    activeSheet.getRange("F1").setValue("EDIT");
+    console.log(`Reset ${lastEditedSheetName} sync mode to EDIT`);
   } else {
     console.log('No specific sheet to update in Coda (either Combined sheet or no active sheet detected)');
+  }
+  
+  } finally {
+    // Always release the lock
+    PropertiesService.getScriptProperties().deleteProperty('SYNC_LOCK');
+    console.log('Released sync lock');
   }
 }
 
@@ -347,6 +385,20 @@ function fullSyncAllSheetsToCoda() {
     return;
   }
   
+  // Add execution lock to prevent multiple simultaneous runs
+  var lockKey = 'FULL_SYNC_LOCK';
+  var isLocked = PropertiesService.getScriptProperties().getProperty(lockKey);
+  
+  if (isLocked === 'true') {
+    console.log('Full sync already running. Skipping duplicate execution.');
+    return;
+  }
+  
+  // Set lock
+  PropertiesService.getScriptProperties().setProperty(lockKey, 'true');
+  
+  try {
+  
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheets = ss.getSheets();
   var combined = [];
@@ -370,6 +422,18 @@ function fullSyncAllSheetsToCoda() {
     if (sheet.getName() === "Combined") return;
     
     var sheetName = sheet.getName();
+    
+    // Check F1 sync mode - only sync if set to "SYNC"
+    var syncCell = sheet.getRange("F1");
+    var syncValue = syncCell.getValue();
+    
+    if (syncValue !== "SYNC") {
+      console.log(`Full sync: Skipping ${sheetName} - sync mode is: ${syncValue}`);
+      return; // Skip this sheet
+    }
+    
+    console.log(`Full sync: Processing ${sheetName} - sync mode is SYNC`);
+    
     var data = sheet.getRange(7, 1, sheet.getLastRow(), 3).getValues();
     var sheetResults = [];
     
@@ -406,12 +470,57 @@ function fullSyncAllSheetsToCoda() {
       clearCodaForEvent(sheetName);
       Utilities.sleep(1000); // 1 second delay for clear operations
     }
+    
+    // Reset the sync mode back to "EDIT" after successful sync
+    syncCell.setValue("EDIT");
+    console.log(`Full sync: Reset ${sheetName} sync mode to EDIT`);
   });
   
   // Update Google Sheets Combined tab
   updateCombinedSheet(combined);
   
   console.log('Full sync completed!');
+  
+  } finally {
+    // Always release the lock
+    PropertiesService.getScriptProperties().deleteProperty('FULL_SYNC_LOCK');
+    console.log('Released full sync lock');
+  }
+}
+
+// Helper function to set up sync mode dropdowns on all sheets
+function setupSyncModeDropdowns() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheets = ss.getSheets();
+  
+  sheets.forEach(function(sheet) {
+    if (sheet.getName() === "Combined") return;
+    
+    var syncCell = sheet.getRange("F1");
+    
+    // Create data validation rule for dropdown
+    var rule = SpreadsheetApp.newDataValidation()
+      .requireValueInList(['EDIT', 'SYNC'], true)
+      .setAllowInvalid(false)
+      .setHelpText('EDIT = Safe to edit (no sync), SYNC = Trigger sync then return to EDIT')
+      .build();
+    
+    syncCell.setDataValidation(rule);
+    
+    // Set default value to EDIT if cell is empty
+    if (!syncCell.getValue() || syncCell.getValue() === "") {
+      syncCell.setValue("EDIT");
+    }
+    
+    // Add some formatting to make it obvious
+    syncCell.setBackground('#f0f0f0');
+    syncCell.setFontWeight('bold');
+    syncCell.setHorizontalAlignment('center');
+    
+    console.log(`Set up sync mode dropdown for sheet: ${sheet.getName()}`);
+  });
+  
+  SpreadsheetApp.getUi().alert('✅ Sync mode dropdowns set up on all event sheets!\n\nF1 cells now have:\n• EDIT = Safe to edit (no sync)\n• SYNC = Trigger sync then return to EDIT');
 }
 
 // Smart name formatting function to ensure "Last, First" format

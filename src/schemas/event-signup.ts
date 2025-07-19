@@ -74,6 +74,26 @@ export const EventSignupSchema = coda.makeObjectSchema({
       codaType: coda.ValueHintType.DateTime,
       description: "Date the signup was last modified",
     },
+    // Additional fields for historical preservation
+    eventStartDate: {
+      type: coda.ValueType.String,
+      codaType: coda.ValueHintType.DateTime,
+      description: "Start date of the event",
+    },
+    eventEndDate: {
+      type: coda.ValueType.String,
+      codaType: coda.ValueHintType.DateTime,
+      description: "End date of the event",
+    },
+    eventType: {
+      type: coda.ValueType.String,
+      description: "Type of event (for historical context)",
+    },
+    syncedAt: {
+      type: coda.ValueType.String,
+      codaType: coda.ValueHintType.DateTime,
+      description: "When this signup was last synced from EA",
+    },
   },
   displayProperty: "personName",
   idProperty: "eventSignupId",

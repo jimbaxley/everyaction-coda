@@ -751,6 +751,38 @@ function clearCodaTable(apiToken, docId, tableId) {
   }
 }
 
+// OnEdit trigger function - only runs when F1 dropdown changes to "SYNC"
+function onEdit(e) {
+  try {
+    // Check if the edit was in cell F1
+    if (e.range.getA1Notation() !== 'F1') {
+      return; // Exit if not F1
+    }
+    
+    // Check if the new value is "SYNC"
+    if (e.value !== 'SYNC') {
+      return; // Exit if not set to SYNC
+    }
+    
+    // Get the sheet that was edited
+    var editedSheet = e.source.getActiveSheet();
+    var sheetName = editedSheet.getName();
+    
+    // Skip if it's the Combined sheet
+    if (sheetName === 'Combined') {
+      return;
+    }
+    
+    console.log(`F1 changed to SYNC on sheet: ${sheetName} - triggering sync`);
+    
+    // Run the sync function
+    combineSheetsAndPushToCoda();
+    
+  } catch (error) {
+    console.error('Error in onEdit trigger:', error);
+  }
+}
+
 // Run this once to store your API token securely
 function storeApiToken() {
   const token = '[YOUR_API_TOKEN_HERE]'; // Replace with your actual Coda API token

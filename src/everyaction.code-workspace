@@ -4,7 +4,7 @@
 			"path": ".."
 		},
 		{
-			"path": "../../http-pack"
+			"path": "../../http-post-pack"
 		}
 	],
 	"settings": {}

@@ -954,6 +954,87 @@ pack.addSyncTable({
   },
 });
 
+// OnlineActionsForms sync table
+pack.addSyncTable({
+  name: "OnlineActionsForms",
+  description: "Sync online action forms from EveryAction",
+  identityName: "OnlineActionsForm",
+  schema: coda.makeObjectSchema({
+    properties: {
+      formId: { type: coda.ValueType.String, description: "Form tracking ID" },
+      name: { type: coda.ValueType.String, description: "Form name" },
+      formType: { type: coda.ValueType.String, description: "Type of form" },
+      formTypeId: { type: coda.ValueType.Number, description: "Form type ID" },
+      isActive: { type: coda.ValueType.Boolean, description: "Whether the form is active" },
+      dateCreated: { type: coda.ValueType.String, codaType: coda.ValueHintType.DateTime, description: "Form creation date" },
+      createdByEmail: { type: coda.ValueType.String, description: "Email of creator" },
+      dateModified: { type: coda.ValueType.String, codaType: coda.ValueHintType.DateTime, description: "Form last modified date" },
+      modifiedByEmail: { type: coda.ValueType.String, description: "Email of last modifier" },
+      eventId: { type: coda.ValueType.Number, description: "Associated event ID" },
+      codeId: { type: coda.ValueType.Number, description: "Associated code ID" },
+      campaignId: { type: coda.ValueType.Number, description: "Associated campaign ID" },
+      isConfirmedOptInEnabled: { type: coda.ValueType.Boolean, description: "Whether confirmed opt-in is enabled" },
+      activistCodes: { type: coda.ValueType.String, description: "Activist code IDs (JSON array)" },
+      designation: { type: coda.ValueType.String, description: "Designation info (JSON)" },
+      confirmationEmailData: { type: coda.ValueType.String, description: "Confirmation email data (JSON)" },
+    },
+    idProperty: "formId",
+    displayProperty: "name",
+  }),
+  formula: {
+    name: "SyncOnlineActionsForms",
+    description: "Sync online action forms from EveryAction",
+    parameters: [],
+    execute: async function ([], context) {
+      const { continuation } = context.sync;
+      const top = 200;
+      const skip = continuation?.skip || 0;
+      
+      const url = `https://api.securevan.com/v4/onlineActionsForms?$top=${top}&$skip=${skip}`;
+      
+      const response = await context.fetcher.fetch({
+        method: "GET",
+        url: url,
+      });
+      
+      const data = response.body;
+      const items = data.items || [];
+      
+      const result = items.map((form: any) => ({
+        formId: form.formTrackingId || form.FormId || "",
+        name: form.formName || form.Name || "",
+        formType: form.formType || form.FormType || "",
+        formTypeId: form.formTypeId || form.FormTypeId || null,
+        isActive: form.isActive !== undefined ? form.isActive : (form.IsActive || false),
+        dateCreated: form.dateCreated || form.DateCreated || "",
+        createdByEmail: form.createdByEmail || form.CreatedByEmail || "",
+        dateModified: form.dateModified || form.DateModified || "",
+        modifiedByEmail: form.modifiedByEmail || form.ModifiedByEmail || "",
+        eventId: form.eventId || form.EventId || null,
+        codeId: form.codeId || form.CodeId || null,
+        campaignId: form.campaignId || form.CampaignId || null,
+        isConfirmedOptInEnabled: form.isConfirmedOptInEnabled !== undefined ? form.isConfirmedOptInEnabled : (form.IsConfirmedOptInEnabled || false),
+        activistCodes: form.activistCodes ? JSON.stringify(form.activistCodes) : "",
+        designation: form.designation ? JSON.stringify(form.designation) : "",
+        confirmationEmailData: form.confirmationEmailData ? JSON.stringify(form.confirmationEmailData) : "",
+      }));
+      
+      let nextContinuation;
+      if (data.nextPageLink) {
+        const skipMatch = data.nextPageLink.match(/\$skip=(\d+)/);
+        if (skipMatch) {
+          nextContinuation = { skip: parseInt(skipMatch[1]) };
+        }
+      }
+      
+      return {
+        result,
+        continuation: nextContinuation,
+      };
+    },
+  },
+});
+
 // Locations sync table (read-only)
 pack.addSyncTable({
   name: "Locations",

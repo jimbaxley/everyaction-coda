@@ -5,72 +5,46 @@ const BASE_URL = "https://api.securevan.com/v4";
 
 export const ContactsTable = coda.makeSyncTable({
   name: "Contacts",
-  description: "Sync contacts from EveryAction",
+  description: "Sync all contacts from EveryAction",
   identityName: "Contact",
   schema: ContactSchema,
   formula: {
     name: "SyncContacts",
     description: "Sync contacts from EveryAction",
-    parameters: [
-      coda.makeParameter({
-        type: coda.ParameterType.String,
-        name: "firstName",
-        description: "First name to search for (required)",
-        optional: false,
-      }),
-      coda.makeParameter({
-        type: coda.ParameterType.String,
-        name: "lastName",
-        description: "Last name to filter by",
-        optional: true,
-      }),
-      coda.makeParameter({
-        type: coda.ParameterType.String,
-        name: "email",
-        description: "Email address to filter by",
-        optional: true,
-      }),
-      coda.makeParameter({
-        type: coda.ParameterType.String,
-        name: "phone",
-        description: "Phone number to filter by",
-        optional: true,
-      }),
-    ],
-    execute: async function ([firstName, lastName, email, phone], context) {
+    parameters: [],
+    execute: async function ([], context) {
       let url = `${BASE_URL}/people`;
-      const queryParams = [];
-      
-      // Required firstName parameter
-      queryParams.push(`firstName=${encodeURIComponent(firstName)}`);
-      
-      // Optional filters
-      if (lastName) {
-        queryParams.push(`lastName=${encodeURIComponent(lastName)}`);
-      }
-      if (email) {
-        queryParams.push(`email=${encodeURIComponent(email)}`);
-      }
-      if (phone) {
-        queryParams.push(`phoneNumber=${encodeURIComponent(phone)}`);
-      }
-      
+      const queryParams: string[] = [];
+
+      // No filters: this table syncs all contacts (full first run, then deltas)
       // Expand related data
       queryParams.push("$expand=addresses,emails,phones");
-      
-      // Add pagination
+
+      // Pagination size
       queryParams.push("$top=50");
-      if (context.sync.continuation) {
+
+      // Delta sync support
+      const prevLastSync = context.sync && context.sync.continuation && context.sync.continuation.lastSyncTime;
+      const newSyncTime = new Date().toISOString();
+      if (prevLastSync) {
+        // For delta runs, request only records changed since last successful sync
+        queryParams.push(`changedSince=${encodeURIComponent(prevLastSync)}`);
+      }
+
+      // Pagination (skip) - preserved across continuation
+      if (context.sync && context.sync.continuation && context.sync.continuation.skip) {
         queryParams.push(`$skip=${context.sync.continuation.skip}`);
       }
-      
+
       url += `?${queryParams.join('&')}`;
-      
+
+      console.log(`SyncContacts: GET ${url}`);
+
       const response = await context.fetcher.fetch({
         method: "GET",
         url: url,
       });
-      
+
       const data = response.body;
       const contacts = data.items || [];
       
@@ -129,14 +103,23 @@ export const ContactsTable = coda.makeSyncTable({
         };
       });
       
-      let continuation;
+      let continuation: any = undefined;
       if (data.nextPageLink) {
         const skipMatch = data.nextPageLink.match(/\$skip=(\d+)/);
         if (skipMatch) {
           continuation = { skip: parseInt(skipMatch[1]) };
+          // If we're already doing a delta run, preserve the previous lastSyncTime across pages
+          if (prevLastSync) {
+            continuation.lastSyncTime = prevLastSync;
+          }
+          console.log(`SyncContacts: paging, next skip=${continuation.skip}`);
         }
+      } else {
+        // Final page: advance the lastSyncTime so next run will be delta from this point
+        continuation = { lastSyncTime: newSyncTime };
+        console.log(`SyncContacts: completed page set lastSyncTime=${newSyncTime}`);
       }
-      
+
       return {
         result,
         continuation,

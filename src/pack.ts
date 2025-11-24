@@ -680,123 +680,76 @@ pack.addSyncTable({
   schema: ContactSchema,
   formula: {
     name: "SyncContacts",
-    description: "Sync contacts from EveryAction",
+    description: "Sync contacts from EveryAction ",
     parameters: [
       coda.makeParameter({
         type: coda.ParameterType.String,
-        name: "firstName",
-        description: "Filter by first name (required - matches contacts with first names starting with this value)",
+        name: "contactMode",
+        description: "Filter by contact mode (e.g., 'Person' or 'Organization')",
         optional: false,
       }),
-      coda.makeParameter({
-        type: coda.ParameterType.String,
-        name: "lastName",
-        description: "Filter by last name (optional)",
-        optional: true,
-      }),
-      coda.makeParameter({
-        type: coda.ParameterType.String,
-        name: "email",
-        description: "Filter by email (optional - matches emails starting with this value)",
-        optional: true,
-      }),
-      coda.makeParameter({
-        type: coda.ParameterType.String,
-        name: "phoneNumber",
-        description: "Filter by phone number (optional)",
-        optional: true,
-      }),
-      coda.makeParameter({
-        type: coda.ParameterType.String,
-        name: "city",
-        description: "Filter by city (optional)",
-        optional: true,
-      }),
-      coda.makeParameter({
-        type: coda.ParameterType.String,
-        name: "stateOrProvince",
-        description: "Filter by state or province code (optional)",
-        optional: true,
-      }),
-      coda.makeParameter({
-        type: coda.ParameterType.String,
-        name: "zipOrPostalCode",
-        description: "Filter by ZIP or postal code (optional)",
-        optional: true,
-      }),
-      coda.makeParameter({
-        type: coda.ParameterType.String,
-        name: "contactMode",
-        description: "Filter by contact mode (Individual, Organization, etc.) (optional)",
-        optional: true,
-      }),
     ],
-    execute: async function ([firstName, lastName, email, phoneNumber, city, stateOrProvince, zipOrPostalCode, contactMode], context) {
+    execute: async function ([contactMode], context) {
       let url = "https://api.securevan.com/v4/people";
-      const queryParams = [];
-      
-      // firstName is required
-      if (firstName) {
-        queryParams.push(`firstName=${encodeURIComponent(firstName)}`);
+      const queryParams: string[] = [];
+
+      // Use changedSince for delta syncs when we have a previous lastSyncTime
+      const prevLastSync = context.sync.continuation?.lastSyncTime;
+
+      // Required contactMode filter (only needed for full initial syncs). If neither contactMode
+      // nor a previous lastSyncTime is present, the EveryAction API will reject the request
+      // with "requires at least one search parameter". Provide a clear error for the user.
+      if (!contactMode && !prevLastSync) {
+        throw new coda.UserVisibleError(
+          "EveryAction requires at least one search parameter for /people (for example: contactMode='Person', firstName, lastName, email, phoneNumber). Please set the Contacts sync table parameter (contactMode) or provide another search filter."
+        );
       }
-      
-      if (lastName) {
-        queryParams.push(`lastName=${encodeURIComponent(lastName)}`);
-      }
-      
-      if (email) {
-        queryParams.push(`email=${encodeURIComponent(email)}`);
-      }
-      
-      if (phoneNumber) {
-        queryParams.push(`phoneNumber=${encodeURIComponent(phoneNumber)}`);
-      }
-      
-      if (city) {
-        queryParams.push(`city=${encodeURIComponent(city)}`);
-      }
-      
-      if (stateOrProvince) {
-        queryParams.push(`stateOrProvince=${encodeURIComponent(stateOrProvince)}`);
-      }
-      
-      if (zipOrPostalCode) {
-        queryParams.push(`zipOrPostalCode=${encodeURIComponent(zipOrPostalCode)}`);
-      }
-      
+
+      // Required contactMode filter
       if (contactMode) {
         queryParams.push(`contactMode=${encodeURIComponent(contactMode)}`);
+        console.log(`Contacts sync using contactMode=${contactMode}`);
       }
-      
-      // Add pagination
+
+      // Use changedSince for delta syncs when we have a previous lastSyncTime
+      if (prevLastSync) {
+        queryParams.push(`changedSince=${encodeURIComponent(prevLastSync)}`);
+        console.log(`Contacts delta sync using changedSince=${prevLastSync}`);
+      } else {
+        console.log("Contacts full sync (no previous lastSyncTime found)");
+      }
+
+      // Pagination
       queryParams.push("$top=50");
-      if (context.sync.continuation) {
+      if (context.sync.continuation?.skip) {
         queryParams.push(`$skip=${context.sync.continuation.skip}`);
+        console.log(`Resuming pagination at skip=${context.sync.continuation.skip}`);
       }
-      
-      // Add expansion for additional contact details
+
+      // Expand additional details
       queryParams.push("$expand=Addresses,Districts,Emails,Phones");
-      
+
       if (queryParams.length > 0) {
         url += `?${queryParams.join('&')}`;
       }
-      
+
+      console.log(`Fetching Contacts from URL: ${url}`);
       const response = await context.fetcher.fetch({
         method: "GET",
         url: url,
       });
-      
+
       const data = response.body;
       const contacts = data.items || [];
-      
+
       const result = contacts.map((contact: any) => {
         // Get primary address
         const primaryAddress = contact.addresses?.find((addr: any) => addr.isPreferred) || contact.addresses?.[0];
-        
+
         // Get primary email and phone
         const primaryEmail = contact.emails?.find((email: any) => email.isPreferred) || contact.emails?.[0];
         const primaryPhone = contact.phones?.find((phone: any) => phone.isPreferred) || contact.phones?.[0];
-        
+
         return {
           vanId: contact.vanId,
           firstName: contact.firstName,
@@ -815,15 +768,26 @@ pack.addSyncTable({
           dateModified: contact.dateModified,
         };
       });
-      
-      let continuation;
+
+      // Prepare continuation: preserve skip for pagination; set lastSyncTime only when we've reached final page
+      let continuation: any = undefined;
       if (data.nextPageLink) {
         const skipMatch = data.nextPageLink.match(/\$skip=(\d+)/);
         if (skipMatch) {
           continuation = { skip: skipMatch[1] };
+          // If we were paginating a delta sync, preserve the previous lastSyncTime until final page
+          if (prevLastSync) {
+            continuation.lastSyncTime = prevLastSync;
+          }
+          console.log(`Contacts pagination continued with skip=${continuation.skip}`);
         }
+      } else {
+        // Final page: set lastSyncTime to now so next run is delta-only
+        const newSyncTime = new Date().toISOString();
+        continuation = { lastSyncTime: newSyncTime };
+        console.log(`Contacts sync complete. Setting lastSyncTime=${newSyncTime}`);
       }
-      
+
       return {
         result,
         continuation,
@@ -1186,6 +1150,59 @@ pack.addFormula({
   }),
   execute: async function () {
     return { foo: "hello", bar: 42 };
+  },
+});
+
+// Get Online Action Form formula
+pack.addFormula({
+  name: "GetOnlineActionForm",
+  description: "Retrieve online action form details including EventID using form tracking ID",
+  parameters: [
+    coda.makeParameter({
+      type: coda.ParameterType.String,
+      name: "formId",
+      description: "The tracking ID of the online action form",
+    }),
+  ],
+  resultType: coda.ValueType.Object,
+  schema: coda.makeObjectSchema({
+    properties: {
+      formId: { type: coda.ValueType.String, description: "Form tracking ID" },
+      name: { type: coda.ValueType.String, description: "Form name" },
+      description: { type: coda.ValueType.String, description: "Form description" },
+      formType: { type: coda.ValueType.String, description: "Type of form (e.g., 'Event')" },
+      eventId: { type: coda.ValueType.Number, description: "Associated event ID (if applicable)" },
+      eventName: { type: coda.ValueType.String, description: "Associated event name (if applicable)" },
+      isActive: { type: coda.ValueType.Boolean, description: "Whether the form is currently active" },
+      createdBy: { type: coda.ValueType.String, description: "User who created the form" },
+      dateCreated: { type: coda.ValueType.String, description: "Form creation date" },
+      dateModified: { type: coda.ValueType.String, description: "Form last modified date" },
+      publicUrl: { type: coda.ValueType.String, description: "Public URL of the form" },
+    },
+    idProperty: "formId",
+    displayProperty: "name",
+  }),
+  execute: async function ([formId], context) {
+    const response = await context.fetcher.fetch({
+      method: "GET",
+      url: `https://api.securevan.com/v4/onlineActionsForms/${formId}`,
+    });
+    
+    const form = response.body;
+    
+    return {
+      formId: form.onlineActionsFormId || formId,
+      name: form.name || "",
+      description: form.description || "",
+      formType: form.formType || "",
+      eventId: form.event?.eventId || null,
+      eventName: form.event?.name || "",
+      isActive: form.isActive || false,
+      createdBy: form.createdBy || "",
+      dateCreated: form.dateCreated || "",
+      dateModified: form.dateModified || "",
+      publicUrl: form.publicUrl || "",
+    };
   },
 });
 

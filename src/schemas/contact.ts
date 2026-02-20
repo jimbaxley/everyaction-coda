@@ -131,6 +131,66 @@ export const ContactSchema = coda.makeObjectSchema({
       type: coda.ValueType.Boolean,
       description: "Whether this contact represents an organization",
     },
+    // Expanded arrays that can be requested from the /people endpoint
+    codes: {
+      fromKey: "codes",
+      type: coda.ValueType.Array,
+      items: {
+        type: coda.ValueType.Object,
+        properties: {
+          codeId: { type: coda.ValueType.Number },
+          parentCodeId: { type: coda.ValueType.Number },
+          name: { type: coda.ValueType.String },
+          codeType: { type: coda.ValueType.String },
+          codePath: { type: coda.ValueType.String },
+          createdByName: { type: coda.ValueType.String },
+          dateCreated: {
+            type: coda.ValueType.String,
+            codaType: coda.ValueHintType.DateTime,
+          },
+        },
+      },
+      description: "List of codes assigned to the contact (requires $expand=codes)",
+    },
+    customFields: {
+      fromKey: "customFields",
+      type: coda.ValueType.Array,
+      items: {
+        type: coda.ValueType.Object,
+        properties: {
+          customFieldId: { type: coda.ValueType.Number },
+          customFieldGroupId: { type: coda.ValueType.Number },
+          assignedValue: { type: coda.ValueType.String },
+          customField: {
+            type: coda.ValueType.Object,
+            properties: {
+              customFieldId: { type: coda.ValueType.Number },
+              customFieldParentId: { type: coda.ValueType.Number },
+              customFieldName: { type: coda.ValueType.String },
+              customFieldGroupId: { type: coda.ValueType.Number },
+              customFieldGroupName: { type: coda.ValueType.String },
+              customFieldGroupType: { type: coda.ValueType.String },
+              customFieldTypeId: { type: coda.ValueType.String },
+              isEditable: { type: coda.ValueType.Boolean },
+              maxTextboxCharacters: { type: coda.ValueType.Number },
+              availableValues: {
+                type: coda.ValueType.Array,
+                items: {
+                  type: coda.ValueType.Object,
+                  properties: {
+                    id: { type: coda.ValueType.Number },
+                    name: { type: coda.ValueType.String },
+                    parentValueId: { type: coda.ValueType.Number },
+                  },
+                },
+              },
+              isExportable: { type: coda.ValueType.Boolean },
+            },
+          },
+        },
+      },
+      description: "Custom fields attached to the contact (requires $expand=customFields)",
+    },
   },
   displayProperty: "firstName",
   idProperty: "vanId",

@@ -18,7 +18,7 @@ export const ContactsTable = coda.makeSyncTable({
 
       // No filters: this table syncs all contacts (full first run, then deltas)
       // Expand related data
-      queryParams.push("$expand=addresses,emails,phones");
+      queryParams.push("$expand=addresses,emails,phones,codes,customFields");
 
       // Pagination size
       queryParams.push("$top=50");
@@ -92,6 +92,8 @@ export const ContactsTable = coda.makeSyncTable({
           addresses: Array.isArray(contact.addresses) ? contact.addresses : [],
           emails: Array.isArray(contact.emails) ? contact.emails : [],
           phones: Array.isArray(contact.phones) ? contact.phones : [],
+          codes: Array.isArray(contact.codes) ? contact.codes : [],
+          customFields: Array.isArray(contact.customFields) ? contact.customFields : [],
           primaryAddress: formatAddress(primaryAddress) || "",
           primaryEmail: primaryEmail?.email || "",
           primaryPhone: primaryPhone?.phoneNumber || "",

@@ -56,7 +56,9 @@ pack.addFormula({
   schema: ContactSchema,
   execute: async function ([vanId], context) {
     const BASE_URL = "https://api.securevan.com/v4";
-    const encodedUrl = `${BASE_URL}/people/${vanId}?%24expand=emails,phones,addresses`;
+    // Always request these expanded fields
+    const expands: string[] = ["emails", "phones", "addresses", "codes", "customFields"];
+    const encodedUrl = `${BASE_URL}/people/${vanId}?%24expand=${expands.join(",")}`;
 
     const response = await context.fetcher.fetch({
       method: "GET",
@@ -87,6 +89,8 @@ pack.addFormula({
       dateModified: contact.dateModified,
       emails: Array.isArray(contact.emails) ? contact.emails : [],
       phones: Array.isArray(contact.phones) ? contact.phones : [],
+      codes: Array.isArray(contact.codes) ? contact.codes : [],
+      customFields: Array.isArray(contact.customFields) ? contact.customFields : [],
     };
   },
 });
@@ -726,8 +730,8 @@ pack.addSyncTable({
         console.log(`Resuming pagination at skip=${context.sync.continuation.skip}`);
       }
 
-      // Expand additional details
-      queryParams.push("$expand=Addresses,Districts,Emails,Phones");
+      // Expand additional details including our new fields
+      queryParams.push("$expand=Addresses,Districts,Emails,Phones,codes,customFields");
 
       if (queryParams.length > 0) {
         url += `?${queryParams.join('&')}`;
@@ -766,6 +770,8 @@ pack.addSyncTable({
           contactMode: contact.contactMode,
           dateCreated: contact.dateCreated,
           dateModified: contact.dateModified,
+          codes: Array.isArray(contact.codes) ? contact.codes : [],
+          customFields: Array.isArray(contact.customFields) ? contact.customFields : [],
         };
       });
 

@@ -15,14 +15,14 @@ export const getContact = coda.makeFormula({
   ],
   resultType: coda.ValueType.Object,
   schema: ContactSchema,
-  execute: async function ([vanId], context) {
+  execute: async function ([vanId, expand], context) {
     if (isNaN(vanId) || vanId <= 0) {
       throw new coda.UserVisibleError("Invalid VAN ID. Please provide a positive number.");
     }
 
-    // Encode the entire URL to ensure query parameters are preserved
-    // Use OData convention: encode the $ in the query key as %24 to bypass Coda's stripping
-    const encodedUrl = `${BASE_URL}/people/${vanId}?%24expand=emails,phones,addresses`;
+    // Always request these expanded fields
+    const expands = ["emails", "phones", "addresses", "codes", "customFields"];
+    const encodedUrl = `${BASE_URL}/people/${vanId}?%24expand=${expands.join(",")}`;
     console.log("GetContact: URL:", encodedUrl);
 
     try {

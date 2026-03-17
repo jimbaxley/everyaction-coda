@@ -32,15 +32,18 @@ export const EventSchema = coda.makeObjectSchema({
       codaType: coda.ValueHintType.DateTime,
       description: "Event end date and time",
     },
-    publicWebsiteUrl: {
-      type: coda.ValueType.String,
-      codaType: coda.ValueHintType.Url,
-      description: "Public website URL for the event",
-    },
-    voterRegistrationBatches: {
+    shifts: {
       type: coda.ValueType.Array,
-      items: { type: coda.ValueType.String },
-      description: "Voter registration batch IDs",
+      items: coda.makeObjectSchema({
+        properties: {
+          eventShiftId: { type: coda.ValueType.Number, description: "Shift ID" },
+          name: { type: coda.ValueType.String, description: "Shift name" },
+          startTime: { type: coda.ValueType.String, codaType: coda.ValueHintType.DateTime, description: "Shift start time" },
+          endTime: { type: coda.ValueType.String, codaType: coda.ValueHintType.DateTime, description: "Shift end time" },
+        },
+        displayProperty: "name",
+      }),
+      description: "Event shifts",
     },
     notes: {
       type: coda.ValueType.String,

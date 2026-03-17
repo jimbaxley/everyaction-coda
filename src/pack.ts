@@ -116,25 +116,122 @@ pack.addFormula({
       description: "Contact's email address",
       optional: true,
     }),
+    coda.makeParameter({
+      type: coda.ParameterType.String,
+      name: "phoneNumber",
+      description: "Contact's phone number",
+      optional: true,
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.String,
+      name: "streetAddress",
+      description: "Street address (address line 1)",
+      optional: true,
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.String,
+      name: "city",
+      description: "City",
+      optional: true,
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.String,
+      name: "stateOrProvince",
+      description: "State or province (e.g., 'NC')",
+      optional: true,
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.String,
+      name: "zipOrPostalCode",
+      description: "ZIP or postal code",
+      optional: true,
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.StringArray,
+      name: "codes",
+      description: "Activist code IDs to apply (e.g., ['1234', '5678'])",
+      optional: true,
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.StringArray,
+      name: "customFieldIds",
+      description: "Custom field IDs (one per entry, must match customFieldGroupIds and customFieldAssignedValues by position)",
+      optional: true,
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.StringArray,
+      name: "customFieldGroupIds",
+      description: "Custom field group IDs (one per entry, must match customFieldIds by position)",
+      optional: true,
+    }),
+    coda.makeParameter({
+      type: coda.ParameterType.StringArray,
+      name: "customFieldAssignedValues",
+      description: "Assigned values for each custom field (one per entry, must match customFieldIds by position)",
+      optional: true,
+    }),
   ],
   resultType: coda.ValueType.Number,
-  execute: async function ([firstName, lastName, email], context) {
-    const contactData = {
+  execute: async function ([firstName, lastName, email, phoneNumber, streetAddress, city, stateOrProvince, zipOrPostalCode, codes, customFieldIds, customFieldGroupIds, customFieldAssignedValues], context) {
+    const contactData: any = {
       firstName,
       lastName,
       emails: email ? [{ email, type: "P" }] : [],
+      phones: phoneNumber ? [{ phoneNumber, type: "P" }] : [],
     };
+
+    if (streetAddress || city || stateOrProvince || zipOrPostalCode) {
+      contactData.addresses = [{
+        ...(streetAddress && { addressLine1: streetAddress }),
+        ...(city && { city }),
+        ...(stateOrProvince && { stateOrProvince }),
+        ...(zipOrPostalCode && { zipOrPostalCode }),
+        type: "P",
+      }];
+    }
+
+    if (customFieldIds && customFieldIds.length > 0) {
+      contactData.customFieldValues = customFieldIds.map((fieldId: string, i: number) => ({
+        customFieldId: parseInt(fieldId, 10),
+        customFieldGroupId: parseInt((customFieldGroupIds?.[i] ?? "0"), 10),
+        assignedValue: customFieldAssignedValues?.[i] ?? "",
+      }));
+    }
     
-    const response = await context.fetcher.fetch({
+    const createResponse = await context.fetcher.fetch({
       method: "POST",
-      url: "https://api.securevan.com/v4/people",
+      url: "https://api.securevan.com/v4/people/findorcreate",
       headers: {
         "Content-Type": "application/json",
       },
       body: JSON.stringify(contactData),
     });
-    
-    return response.body; // Returns the new VAN ID
+
+    const rawVanId = createResponse.body?.vanId ?? createResponse.body;
+    const vanId = typeof rawVanId === "number" ? rawVanId : parseInt(String(rawVanId), 10);
+    if (!vanId || Number.isNaN(vanId)) {
+      throw new coda.UserVisibleError("CreateContact succeeded but no valid VAN ID was returned.");
+    }
+
+    if (codes && codes.length > 0) {
+      for (const id of codes) {
+        const codeId = parseInt(id, 10);
+        if (Number.isNaN(codeId)) {
+          throw new coda.UserVisibleError(`Invalid code ID: ${id}`);
+        }
+
+        await context.fetcher.fetch({
+          method: "POST",
+          url: `https://api.securevan.com/v4/people/${vanId}/codes`,
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ codeId }),
+        });
+      }
+    }
+
+    return vanId;
   },
 });
 
@@ -814,8 +911,8 @@ pack.addSyncTable({
     parameters: [
       coda.makeParameter({
         type: coda.ParameterType.String,
-        name: "eventType",
-        description: "Filter by event type (optional)",
+        name: "eventTypeIds",
+        description: "Filter by event type ID(s), comma-separated (optional)",
         optional: true,
       }),
       coda.makeParameter({
@@ -825,12 +922,12 @@ pack.addSyncTable({
         optional: true,
       }),
     ],
-    execute: async function ([eventType, startDate], context) {
+    execute: async function ([eventTypeIds, startDate], context) {
       let url = "https://api.securevan.com/v4/events";
       const queryParams = [];
       
-      if (eventType) {
-        queryParams.push(`eventType=${encodeURIComponent(eventType)}`);
+      if (eventTypeIds) {
+        queryParams.push(`eventTypeIds=${encodeURIComponent(eventTypeIds)}`);
       }
       
       if (startDate) {
@@ -842,6 +939,7 @@ pack.addSyncTable({
       if (context.sync.continuation) {
         queryParams.push(`$skip=${context.sync.continuation.skip}`);
       }
+      queryParams.push("$expand=shifts");
       
       if (queryParams.length > 0) {
         url += `?${queryParams.join('&')}`;
@@ -863,8 +961,7 @@ pack.addSyncTable({
         eventType: event.eventType?.name,
         startDate: event.startDate,
         endDate: event.endDate,
-        publicWebsiteUrl: event.publicWebsiteUrl,
-        voterRegistrationBatches: event.voterRegistrationBatches || [],
+        shifts: Array.isArray(event.shifts) ? event.shifts : [],
         notes: event.notes,
         dateCreated: event.dateCreated,
         dateModified: event.dateModified,

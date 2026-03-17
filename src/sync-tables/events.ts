@@ -14,8 +14,8 @@ export const EventsTable = coda.makeSyncTable({
     parameters: [
       coda.makeParameter({
         type: coda.ParameterType.String,
-        name: "eventType",
-        description: "Filter by event type (optional)",
+        name: "eventTypeIds",
+        description: "Filter by event type ID(s), comma-separated (optional)",
         optional: true,
       }),
       coda.makeParameter({
@@ -25,12 +25,12 @@ export const EventsTable = coda.makeSyncTable({
         optional: true,
       }),
     ],
-    execute: async function ([eventType, startDate], context) {
+    execute: async function ([eventTypeIds, startDate], context) {
       let url = `${BASE_URL}/events`;
       const queryParams = [];
       
-      if (eventType) {
-        queryParams.push(`eventType=${encodeURIComponent(eventType)}`);
+      if (eventTypeIds) {
+        queryParams.push(`eventTypeIds=${encodeURIComponent(eventTypeIds)}`);
       }
       
       if (startDate) {
@@ -42,6 +42,7 @@ export const EventsTable = coda.makeSyncTable({
       if (context.sync.continuation) {
         queryParams.push(`$skip=${context.sync.continuation.skip}`);
       }
+      queryParams.push("$expand=shifts");
       
       if (queryParams.length > 0) {
         url += `?${queryParams.join('&')}`;
@@ -55,27 +56,18 @@ export const EventsTable = coda.makeSyncTable({
       const data = response.body;
       const events = data.items || [];
       
-      const result = await Promise.all(events.map(async (event: any) => {
-        return {
-          eventId: event.eventId,
-          name: event.name || "",
-          shortName: event.shortName || "",
-          description: event.description || "",
-          eventType: event.eventType?.name || "",
-          startDate: event.startDate || "",
-          endDate: event.endDate || "",
-          publicWebsiteUrl: event.publicWebsiteUrl || "",
-          voterRegistrationBatches: Array.isArray(event.voterRegistrationBatches) ? event.voterRegistrationBatches : [],
-          notes: event.notes || "",
-          dateCreated: event.createdDate || event.dateCreated || "",
-          dateModified: event.dateModified || "",
-          totalSignups: undefined, // removed for now
-          completedSignups: undefined, // removed for now
-          schedWebSignups: undefined, // removed for now
-          declinedSignups: undefined, // removed for now
-          noShowSignups: undefined, // removed for now
-          testColumn: undefined, // removed for now
-        };
+      const result = events.map((event: any) => ({
+        eventId: event.eventId,
+        name: event.name || "",
+        shortName: event.shortName || "",
+        description: event.description || "",
+        eventType: event.eventType?.name || "",
+        startDate: event.startDate || "",
+        endDate: event.endDate || "",
+        shifts: Array.isArray(event.shifts) ? event.shifts : [],
+        notes: event.notes || "",
+        dateCreated: event.createdDate || event.dateCreated || "",
+        dateModified: event.dateModified || "",
       }));
       let continuation;
       if (data.nextPageLink) {
